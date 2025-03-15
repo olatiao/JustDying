@@ -126,4 +126,15 @@
 
 [报告Bug](https://github.com/olatiao/JustDying/issues) · [请求功能](https://github.com/olatiao/JustDying/issues) · [Fork](https://github.com/olatiao/JustDying/fork)
 
-</div> 
+</div>
+
+## 开发分支
+
+这是开发分支(dev)，用于开发新功能和修复bug。
+
+## 功能
+
+- 属性系统
+- 属性点分配
+- 等级兑换
+- 自定义物品 
