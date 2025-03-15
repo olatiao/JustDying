@@ -1,0 +1,47 @@
+# Gradle项目文件
+.gradle/
+build/
+gradle/
+gradlew
+gradlew.bat
+gradle.properties
+
+# IDE文件
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.classpath
+.project
+.settings/
+bin/
+eclipse/
+
+# 运行时生成文件
+run/
+logs/
+out/
+classes/
+remappedSrc/
+
+# 编译输出
+*.class
+*.jar
+!gradle-wrapper.jar
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# 备份文件
+*.bak
+temp_backup/
+
+# 本地配置文件
+local.properties
