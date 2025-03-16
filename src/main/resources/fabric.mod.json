@@ -1,0 +1,57 @@
+{
+	"schemaVersion": 1,
+	"id": "justdying",
+	"version": "${version}",
+	"name": "JustDying",
+	"description": "In JustDie, every adventure is filled with unpredictability and challenges! With the unique Affix System, your weapons and armor will become extraordinary—imbue them with effects like fire, frost, or thunder to create your own legendary gear. The brand-new Attribute System allows you to take control of your destiny by trading levels for unlimited power, unlocking your maximum potential. This is a journey of choices and growth, but remember: no matter how strong you are, death is always lurking. Are you ready?",
+	"authors": [
+		"Me!"
+	],
+	"contact": {
+		"homepage": "https://fabricmc.net/",
+		"sources": "https://github.com/FabricMC/fabric-example-mod"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/justdying/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.justdie.JustDying"
+		],
+		"client": [
+			"com.justdie.JustDyingClient"
+		],
+		"fabric-datagen": [
+			"com.justdie.JustDyingDataGenerator"
+		],
+		"cardinal-components-entity": [
+			"com.justdie.attribute.AttributeComponents"
+		],
+		"modmenu": [
+			"com.justdie.config.ModMenuCompat"
+		]
+	},
+	"mixins": [
+		"justdying.mixins.json",
+		{
+			"config": "justdying.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.16.10",
+		"minecraft": "~1.20.1",
+		"java": ">=17",
+		"fabric-api": "*",
+		"cloth-config": ">=11.0.0",
+		"cardinal-components": ">=5.0.0"
+	},
+	"suggests": {
+		"another-mod": "*"
+	},
+	"custom": {
+		"cardinal-components": [
+			"justdying:player_attributes"
+		]
+	}
+}
