@@ -889,7 +889,10 @@ public class AttributeCommands {
      * 发送信息消息
      */
     private static void sendInfoMessage(CommandContext<ServerCommandSource> context, String format, Object... args) {
-        // 不向玩家发送消息
+        // 输出list和help命令的消息，其他命令不显示
+        context.getSource().sendFeedback(() -> 
+                Text.translatable(format, args).formatted(Formatting.AQUA), false);
+        
         if (JustDying.getConfig().debug) {
             JustDying.LOGGER.debug("信息: " + String.format(format, args));
         }
