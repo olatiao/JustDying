@@ -52,7 +52,9 @@
 - `/attributes get <属性>` - 查看指定属性的值
 - `/attributes set <属性> <值> [玩家]` - 设置属性值（仅管理员）
 - `/attributes points` - 查看可用属性点
-- `/attributes addpoints <点数> [玩家]` - 添加属性点（仅管理员）
+- `/attributes points increase <点数> [玩家]` - 增加属性点（仅管理员）
+- `/attributes points decrease <点数> [玩家]` - 减少属性点（仅管理员）
+- `/attributes addpoints <点数> [玩家]` - 添加属性点（旧命令，保留向后兼容）
 - `/attributes max set <属性> <值>` - 设置属性最大值（仅管理员）
 - `/attributes max increase <属性> <值>` - 增加属性最大值（仅管理员）
 - `/attributes max decrease <属性> <值>` - 减少属性最大值（仅管理员）
