@@ -71,6 +71,8 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
     public SorcererBossEntity(EntityType<? extends PathAwareEntity> entityType, World world) {
         super(entityType, world);
         this.serverTick = new SorcererServerTick(this);
+        this.setStepHeight(1.0F); // 使用setter方法增加台阶高度
+        this.noClip = false; // 确保不穿墙
     }
 
     @Override
@@ -253,93 +255,110 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
     // 覆盖移动相关方法，确保实体总是直立的
     @Override
     public void travel(Vec3d movementInput) {
+        // 始终保持垂直姿态
         this.setPitch(0);
-        super.travel(new Vec3d(movementInput.x, 0, movementInput.z)); // 禁用垂直移动
+        this.prevPitch = 0;
+        
+        // 仅使用水平移动分量
+        Vec3d horizontalMovement = new Vec3d(movementInput.x, 0, movementInput.z);
+        super.travel(horizontalMovement);
+        
+        // 移动后再次重置姿态
+        this.setPitch(0);
+        this.prevPitch = 0;
     }
 
     @Override
     public void updateLimbs(float limbDistance) {
-        super.updateLimbs(limbDistance);
-        this.setPitch(0);
+        // 完全替换原有实现，不调用super方法
+        // 这样可以防止原版动画系统影响模型
     }
 
-    // 添加更多覆盖方法以防止倒地
+    // 使用自定义碰撞箱优化碰撞检测
+    // 已删除重复的initDataTracker方法，此处使用的是类顶部已经定义的方法
+
+    // 全面替换默认的移动和位置计算逻辑
     @Override
-    public void tick() {
-        // 在每一帧都重置俯仰角
+    public void baseTick() {
+        // 在基础tick开始前强制设置姿态
+        this.setYaw(this.headYaw);
+        
+        // 清除所有俯仰角变化和偏移量
         this.setPitch(0);
         this.prevPitch = 0;
         
-        super.tick();
+        super.baseTick();
         
-        // 确保在tick结束时也保持直立
-        this.setPitch(0);
-        this.prevPitch = 0;
-        
-        // 确保实体永远不会跳跃或掉落
-        if (!this.isOnGround() && this.getVelocity().y < 0) {
-            // 如果在空中并且正在下落，尝试找到地面
-            Vec3d pos = this.getPos();
-            int safeY = findSafeY(this.getWorld(), pos.x, pos.z);
-            if (safeY > 0) {
-                this.refreshPositionAndAngles(pos.x, safeY, pos.z, this.getYaw(), 0);
-                this.setVelocity(Vec3d.ZERO);
-            }
-        }
-    }
-
-    @Override
-    public void setPosition(double x, double y, double z) {
-        super.setPosition(x, y, z);
-        // 位置更新后立即重置俯仰角
-        this.setPitch(0);
-    }
-
-    @Override
-    public void onLanding() {
-        super.onLanding();
-        // 着陆后立即重置姿势
+        // 在基础tick结束后再次强制设置姿态
         this.setPitch(0);
         this.prevPitch = 0;
     }
-
-    @Override
-    protected boolean shouldSwimInFluids() {
-        // 禁用游泳功能，防止姿势变化
-        return false;
-    }
-
-    // 直接禁用物理重力效果
+    
+    // 防止实体掉落
     @Override
     public boolean hasNoGravity() {
-        return true; // 实体不受重力影响
+        return true;
     }
-
-    // 自定义碰撞处理
+    
+    // 完全锁定动画姿势
     @Override
-    public void pushAway(net.minecraft.entity.Entity entity) {
-        // 禁止其他实体推动此BOSS
-        if (!(entity instanceof PlayerEntity)) {
-            return;
-        }
-        super.pushAway(entity);
-    }
-
-    @Override
-    public void pushAwayFrom(net.minecraft.entity.Entity entity) {
-        // 阻止被推动后的姿势变化
-        super.pushAwayFrom(entity);
-        this.setPitch(0);
-    }
-
-    // 重写calculateDimensions确保实体碰撞箱始终保持良好
-    @Override
-    public void calculateDimensions() {
-        super.calculateDimensions();
+    public void tickMovement() {
+        // 缓存当前yaw用于计算移动
+        float originalYaw = this.getYaw();
         
-        // 在每次尺寸变更后强制重置姿势
+        // 设置直立姿态
         this.setPitch(0);
         this.prevPitch = 0;
+        
+        super.tickMovement();
+        
+        // 移动后重置姿态
+        this.setPitch(0);
+        this.prevPitch = 0;
+        
+        // 确保实体不会进入飞行状态
+        if (!this.isOnGround() && this.getVelocity().y < 0) {
+            // 如果在空中且下落中，尝试找到地面
+            this.setVelocity(this.getVelocity().multiply(1, 0, 1));
+        }
+    }
+    
+    // 替换默认的旋转行为
+    @Override
+    public void setHeadYaw(float headYaw) {
+        // 同步头部和身体朝向
+        super.setHeadYaw(headYaw);
+        this.bodyYaw = this.headYaw;
+        this.prevBodyYaw = this.bodyYaw;
+    }
+    
+    // 锁定俯仰角
+    @Override
+    public void setRotation(float yaw, float pitch) {
+        // 忽略传入的pitch，始终保持为0
+        super.setRotation(yaw, 0);
+    }
+
+    // 重写碰撞检测方法
+    @Override
+    public boolean collidesWith(net.minecraft.entity.Entity other) {
+        // 只与玩家和重要实体碰撞，忽略小型实体
+        if (other instanceof net.minecraft.entity.mob.SlimeEntity) {
+            return false;
+        }
+        return super.collidesWith(other);
+    }
+    
+    // 处理掉落相关方法和动作
+    @Override
+    protected void fall(double heightDifference, boolean onGround, net.minecraft.block.BlockState landedState, net.minecraft.util.math.BlockPos landedPosition) {
+        // 完全禁用掉落伤害和动画
+    }
+    
+    @Override
+    public boolean handleFallDamage(float fallDistance, float damageMultiplier, net.minecraft.entity.damage.DamageSource damageSource) {
+        // 完全禁用掉落伤害
+        return false;
     }
 
     // GeckoLib方法实现
@@ -353,15 +372,17 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         this.setPitch(0.0f);
         this.prevPitch = 0.0f;
         this.setBodyYaw(this.getYaw());
-
+        this.prevBodyYaw = this.bodyYaw;
+        
         // 强制停止所有垂直移动
         Vec3d velocity = this.getVelocity();
         if (velocity.y != 0) {
             this.setVelocity(velocity.x, 0, velocity.z);
         }
-
+        
+        // 根据当前状态选择动画
         int castState = this.getCastState();
-
+        
         // 根据施法状态选择动画
         if (this.isTeleporting()) {
             return state.setAndContinue(ANIM_TELEPORT);
