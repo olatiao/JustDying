@@ -4,6 +4,7 @@ import com.justdie.affix.AffixEventHandler;
 import com.justdie.affix.AffixManager;
 import com.justdie.attribute.AttributeManager;
 import com.justdie.attribute.AttributeHelper;
+import com.justdie.boss.registry.BossRegistry;
 import com.justdie.command.AttributeCommands;
 import com.justdie.command.AffixCommand;
 import com.justdie.config.DefaultConfig;
@@ -45,10 +46,13 @@ public class JustDying implements ModInitializer {
 	private static final String LOG_AFFIX_DISABLED = "词缀系统已在配置中禁用";
 	private static final String LOG_AFFIX_INITIALIZING = "初始化词缀系统...";
 	private static final String LOG_AFFIX_INITIALIZED = "词缀系统初始化完成";
+	private static final String LOG_BOSS_INITIALIZING = "初始化BOSS系统...";
+	private static final String LOG_BOSS_INITIALIZED = "BOSS系统初始化完成";
 	
 	// 日志记录器
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 	public static final Logger AFFIX_LOGGER = LoggerFactory.getLogger(MOD_ID + "_affix");
+	public static final Logger BOSS_LOGGER = LoggerFactory.getLogger(MOD_ID + "_boss");
 
 	// 配置实例
 	private static JustDyingConfig CONFIG;
@@ -73,6 +77,9 @@ public class JustDying implements ModInitializer {
 			
 			// 初始化词缀系统
 			initializeAffixSystem();
+			
+			// 初始化BOSS系统
+			initializeBossSystem();
 			
 			// 记录初始化完成
 			long duration = System.currentTimeMillis() - startTime;
@@ -114,6 +121,28 @@ public class JustDying implements ModInitializer {
 		// 注册词缀命令（如果启用）
 		if (CONFIG.affixes.enableAffixCommands) {
 			CommandRegistrationCallback.EVENT.register(AffixCommand::register);
+		}
+	}
+	
+	/**
+	 * 初始化BOSS系统
+	 */
+	private void initializeBossSystem() {
+		BOSS_LOGGER.info(LOG_BOSS_INITIALIZING);
+		
+		try {
+			// 注册BOSS实体
+			BossRegistry.registerEntities();
+			
+			// 注册BOSS属性
+			BossRegistry.registerAttributes();
+			
+			// 注册BOSS命令
+			com.justdie.boss.command.BossCommands.register();
+			
+			BOSS_LOGGER.info(LOG_BOSS_INITIALIZED);
+		} catch (Exception e) {
+			BOSS_LOGGER.error("BOSS系统初始化失败", e);
 		}
 	}
 	

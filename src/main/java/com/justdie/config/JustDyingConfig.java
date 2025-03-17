@@ -451,5 +451,5 @@ public class JustDyingConfig implements ConfigData {
                         this.chance = chance;
                         this.trigger = trigger;
                 }
-        }
+    }
 }

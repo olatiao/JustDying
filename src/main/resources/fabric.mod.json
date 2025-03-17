@@ -19,7 +19,7 @@
 			"com.justdie.JustDying"
 		],
 		"client": [
-			"com.justdie.JustDyingClient"
+			"com.justdie.boss.client.BossClientRegistry"
 		],
 		"fabric-datagen": [
 			"com.justdie.JustDyingDataGenerator"
