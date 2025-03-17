@@ -31,9 +31,11 @@ public class AttributeCommands {
     private static final String CMD_GET = "get";
     private static final String CMD_SET = "set";
     private static final String CMD_POINTS = "points";
-    private static final String CMD_ADD_POINTS = "addpoints";
+    private static final String CMD_POINTS_SET = "set";
     private static final String CMD_POINTS_INCREASE = "increase";
     private static final String CMD_POINTS_DECREASE = "decrease";
+    private static final String CMD_ATTR_INCREASE = "increase";
+    private static final String CMD_ATTR_DECREASE = "decrease";
     private static final String CMD_MAX = "max";
     private static final String CMD_MAX_INCREASE = "increase";
     private static final String CMD_MAX_DECREASE = "decrease";
@@ -51,6 +53,8 @@ public class AttributeCommands {
     private static final String MSG_CURRENT_VALUE = "当前属性 %s: %d";
     private static final String MSG_AVAILABLE_POINTS = "当前可用点数: %d";
     private static final String MSG_ATTRIBUTE_SET = "已设置 %s 的 %s 属性为 %d";
+    private static final String MSG_ATTRIBUTE_INCREASED = "已增加 %s 的 %s 属性 %d 点，现在为 %d";
+    private static final String MSG_ATTRIBUTE_DECREASED = "已减少 %s 的 %s 属性 %d 点，现在为 %d";
     private static final String MSG_POINTS_SET = "已设置 %s 的可用点数为 %d";
     private static final String MSG_POINTS_ADDED = "已为 %s 添加 %d 点数";
     private static final String MSG_POINTS_DECREASED = "已为 %s 减少 %d 点数";
@@ -67,9 +71,10 @@ public class AttributeCommands {
     private static final String MSG_LIST_ITEM = " - %s (%s): %d/%d";
     private static final String MSG_HELP_HEADER = "属性命令帮助:";
     private static final String MSG_HELP_GET = " - /attributes get <属性>: 查看属性值";
-    private static final String MSG_HELP_SET = " - /attributes set <属性> <值> [玩家]: 设置属性值";
+    private static final String MSG_HELP_ATTR_INCREASE = " - /attributes increase <属性> <值> [玩家]: 增加属性值";
+    private static final String MSG_HELP_ATTR_DECREASE = " - /attributes decrease <属性> <值> [玩家]: 减少属性值";
     private static final String MSG_HELP_POINTS = " - /attributes points: 查看可用点数";
-    private static final String MSG_HELP_ADD_POINTS = " - /attributes addpoints <点数> [玩家]: 添加可用点数";
+    private static final String MSG_HELP_POINTS_SET = " - /attributes points set <点数> [玩家]: 设置可用点数";
     private static final String MSG_HELP_POINTS_INCREASE = " - /attributes points increase <点数> [玩家]: 增加可用点数";
     private static final String MSG_HELP_POINTS_DECREASE = " - /attributes points decrease <点数> [玩家]: 减少可用点数";
     private static final String MSG_HELP_MAX = " - /attributes max set <属性> <值>: 设置属性最大值";
@@ -100,14 +105,14 @@ public class AttributeCommands {
             // 注册获取属性命令 (权限等级 0)
             registerGetCommand(dispatcher);
             
-            // 注册设置属性命令 (权限等级 2)
-            registerSetCommand(dispatcher);
+            // 注册属性增加命令 (权限等级 2)
+            registerAttributeIncreaseCommand(dispatcher);
+            
+            // 注册属性减少命令 (权限等级 2)
+            registerAttributeDecreaseCommand(dispatcher);
             
             // 注册获取可用点数命令 (权限等级 0)
             registerPointsCommand(dispatcher);
-            
-            // 注册添加点数命令 (权限等级 2) - 保留向后兼容性
-            registerAddPointsCommand(dispatcher);
             
             // 注册设置最大值命令 (权限等级 2)
             registerMaxCommand(dispatcher);
@@ -144,20 +149,20 @@ public class AttributeCommands {
     }
     
     /**
-     * 注册设置属性命令
+     * 注册属性值增加命令
      */
-    private static void registerSetCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+    private static void registerAttributeIncreaseCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(
             CommandManager.literal(CMD_ROOT)
                 .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
-                .then(CommandManager.literal(CMD_SET)
+                .then(CommandManager.literal(CMD_ATTR_INCREASE)
                     .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
                         .suggests((context, builder) -> {
                             AttributeManager.getAllAttributes().forEach(attr -> 
                                 builder.suggest(attr.getId().getPath()));
                             return builder.buildFuture();
                         })
-                        .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(0))
+                        .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(1))
                             .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
                                 .executes(context -> {
                                     try {
@@ -169,7 +174,7 @@ public class AttributeCommands {
                                                     StringArgumentType.getString(context, ARG_PLAYER));
                                             return 0;
                                         }
-                                        return setAttributeCommand(
+                                        return increaseAttributeCommand(
                                                 context, 
                                                 player, 
                                                 StringArgumentType.getString(context, ARG_ATTRIBUTE),
@@ -182,7 +187,62 @@ public class AttributeCommands {
                             )
                             .executes(context -> {
                                 try {
-                                    return setAttributeCommand(
+                                    return increaseAttributeCommand(
+                                            context,
+                                            getPlayerFromContext(context),
+                                            StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                            IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                } catch (Exception e) {
+                                    handleCommandException(context, e);
+                                    return 0;
+                                }
+                            })
+                        )
+                    )
+                )
+        );
+    }
+    
+    /**
+     * 注册属性值减少命令
+     */
+    private static void registerAttributeDecreaseCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
+                .then(CommandManager.literal(CMD_ATTR_DECREASE)
+                    .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
+                        .suggests((context, builder) -> {
+                            AttributeManager.getAllAttributes().forEach(attr -> 
+                                builder.suggest(attr.getId().getPath()));
+                            return builder.buildFuture();
+                        })
+                        .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(1))
+                            .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
+                                .executes(context -> {
+                                    try {
+                                        ServerPlayerEntity player = getPlayerByName(
+                                                context, 
+                                                StringArgumentType.getString(context, ARG_PLAYER));
+                                        if (player == null) {
+                                            sendErrorMessage(context, MSG_PLAYER_NOT_FOUND, 
+                                                    StringArgumentType.getString(context, ARG_PLAYER));
+                                            return 0;
+                                        }
+                                        return decreaseAttributeCommand(
+                                                context, 
+                                                player, 
+                                                StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                                IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                    } catch (Exception e) {
+                                        handleCommandException(context, e);
+                                        return 0;
+                                    }
+                                })
+                            )
+                            .executes(context -> {
+                                try {
+                                    return decreaseAttributeCommand(
                                             context,
                                             getPlayerFromContext(context),
                                             StringArgumentType.getString(context, ARG_ATTRIBUTE),
@@ -206,22 +266,35 @@ public class AttributeCommands {
             CommandManager.literal(CMD_ROOT)
                 .then(CommandManager.literal(CMD_POINTS)
                     .executes(context -> getPointsCommand(context, getPlayerFromContext(context)))
-                    .then(CommandManager.argument(ARG_POINTS, IntegerArgumentType.integer(0))
+                    .then(CommandManager.literal(CMD_POINTS_SET)
                         .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
-                        .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
-                            .executes(context -> {
-                                try {
-                                    ServerPlayerEntity player = getPlayerByName(
-                                            context, 
-                                            StringArgumentType.getString(context, ARG_PLAYER));
-                                    if (player == null) {
-                                        sendErrorMessage(context, MSG_PLAYER_NOT_FOUND, 
+                        .then(CommandManager.argument(ARG_POINTS, IntegerArgumentType.integer(0))
+                            .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
+                                .executes(context -> {
+                                    try {
+                                        ServerPlayerEntity player = getPlayerByName(
+                                                context, 
                                                 StringArgumentType.getString(context, ARG_PLAYER));
+                                        if (player == null) {
+                                            sendErrorMessage(context, MSG_PLAYER_NOT_FOUND, 
+                                                    StringArgumentType.getString(context, ARG_PLAYER));
+                                            return 0;
+                                        }
+                                        return setPointsCommand(
+                                                context, 
+                                                player,
+                                                IntegerArgumentType.getInteger(context, ARG_POINTS));
+                                    } catch (Exception e) {
+                                        handleCommandException(context, e);
                                         return 0;
                                     }
+                                })
+                            )
+                            .executes(context -> {
+                                try {
                                     return setPointsCommand(
-                                            context, 
-                                            player,
+                                            context,
+                                            getPlayerFromContext(context),
                                             IntegerArgumentType.getInteger(context, ARG_POINTS));
                                 } catch (Exception e) {
                                     handleCommandException(context, e);
@@ -229,17 +302,6 @@ public class AttributeCommands {
                                 }
                             })
                         )
-                        .executes(context -> {
-                            try {
-                                return setPointsCommand(
-                                        context,
-                                        getPlayerFromContext(context),
-                                        IntegerArgumentType.getInteger(context, ARG_POINTS));
-                            } catch (Exception e) {
-                                handleCommandException(context, e);
-                                return 0;
-                            }
-                        })
                     )
                     .then(CommandManager.literal(CMD_POINTS_INCREASE)
                         .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
@@ -314,98 +376,6 @@ public class AttributeCommands {
                                 }
                             })
                         )
-                    )
-                )
-        );
-    }
-    
-    /**
-     * 注册列出属性命令
-     */
-    private static void registerListCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
-        dispatcher.register(
-            CommandManager.literal(CMD_ROOT)
-                .then(CommandManager.literal(CMD_LIST)
-                    .executes(context -> {
-                        try {
-                            return listAttributesCommand(context, getPlayerFromContext(context));
-                        } catch (Exception e) {
-                            handleCommandException(context, e);
-                            return 0;
-                        }
-                    })
-                )
-        );
-    }
-    
-    /**
-     * 注册帮助命令
-     */
-    private static void registerHelpCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
-        dispatcher.register(
-            CommandManager.literal(CMD_ROOT)
-                .then(CommandManager.literal(CMD_HELP)
-                    .executes(context -> {
-                        try {
-                            return showHelpCommand(context);
-                        } catch (Exception e) {
-                            handleCommandException(context, e);
-                            return 0;
-                        }
-                    })
-                )
-                .executes(context -> {
-                    try {
-                        return showHelpCommand(context);
-                    } catch (Exception e) {
-                        handleCommandException(context, e);
-                        return 0;
-                    }
-                })
-        );
-    }
-    
-    /**
-     * 注册添加点数命令
-     */
-    private static void registerAddPointsCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
-        dispatcher.register(
-            CommandManager.literal(CMD_ROOT)
-                .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
-                .then(CommandManager.literal(CMD_ADD_POINTS)
-                    .then(CommandManager.argument(ARG_POINTS, IntegerArgumentType.integer(1))
-                        .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
-                            .executes(context -> {
-                                try {
-                                    ServerPlayerEntity player = getPlayerByName(
-                                            context, 
-                                            StringArgumentType.getString(context, ARG_PLAYER));
-                                    if (player == null) {
-                                        sendErrorMessage(context, MSG_PLAYER_NOT_FOUND, 
-                                                StringArgumentType.getString(context, ARG_PLAYER));
-                                        return 0;
-                                    }
-                                    return addPointsCommand(
-                                            context, 
-                                            player,
-                                            IntegerArgumentType.getInteger(context, ARG_POINTS));
-                                } catch (Exception e) {
-                                    handleCommandException(context, e);
-                                    return 0;
-                                }
-                            })
-                        )
-                        .executes(context -> {
-                            try {
-                                return addPointsCommand(
-                                        context,
-                                        getPlayerFromContext(context),
-                                        IntegerArgumentType.getInteger(context, ARG_POINTS));
-                            } catch (Exception e) {
-                                handleCommandException(context, e);
-                                return 0;
-                            }
-                        })
                     )
                 )
         );
@@ -490,6 +460,52 @@ public class AttributeCommands {
     }
     
     /**
+     * 注册列出属性命令
+     */
+    private static void registerListCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .then(CommandManager.literal(CMD_LIST)
+                    .executes(context -> {
+                        try {
+                            return listAttributesCommand(context, getPlayerFromContext(context));
+                        } catch (Exception e) {
+                            handleCommandException(context, e);
+                            return 0;
+                        }
+                    })
+                )
+        );
+    }
+    
+    /**
+     * 注册帮助命令
+     */
+    private static void registerHelpCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .then(CommandManager.literal(CMD_HELP)
+                    .executes(context -> {
+                        try {
+                            return showHelpCommand(context);
+                        } catch (Exception e) {
+                            handleCommandException(context, e);
+                            return 0;
+                        }
+                    })
+                )
+                .executes(context -> {
+                    try {
+                        return showHelpCommand(context);
+                    } catch (Exception e) {
+                        handleCommandException(context, e);
+                        return 0;
+                    }
+                })
+        );
+    }
+    
+    /**
      * 处理获取属性命令
      */
     private static int getAttributeCommand(CommandContext<ServerCommandSource> context, ServerPlayerEntity player) {
@@ -516,13 +532,18 @@ public class AttributeCommands {
     }
     
     /**
-     * 处理设置属性命令
+     * 处理增加属性值命令
      */
-    private static int setAttributeCommand(
+    private static int increaseAttributeCommand(
             CommandContext<ServerCommandSource> context, 
             ServerPlayerEntity player, 
             String attributeName, 
             int value) {
+        
+        if (value <= 0) {
+            sendErrorMessage(context, MSG_INVALID_VALUE, value);
+            return 0;
+        }
         
         Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
         
@@ -531,22 +552,70 @@ public class AttributeCommands {
             return 0;
         }
         
-        // 验证值有效
-        int minValue = AttributeHelper.getAttributeMinValue(attributeId);
+        // 获取当前值并验证
+        int currentValue = AttributeHelper.getAttributeValue(player, attributeId);
         int maxValue = AttributeHelper.getAttributeMaxValue(attributeId);
         
-        if (value < minValue || value > maxValue) {
-            sendErrorMessage(context, "值必须在 %d 和 %d 之间", minValue, maxValue);
+        if (currentValue + value > maxValue) {
+            sendErrorMessage(context, "无法增加属性，最大值为 %d，当前值为 %d，尝试增加 %d", 
+                    maxValue, currentValue, value);
             return 0;
         }
         
-        // 设置属性值
-        boolean success = AttributeHelper.setAttributeValue(player, attributeId, value);
+        // 增加属性值
+        boolean success = AttributeHelper.addAttributeValue(player, attributeId, value);
         
         if (success) {
+            int newValue = AttributeHelper.getAttributeValue(player, attributeId);
             // 发送成功消息
-            sendSuccessMessage(context, MSG_ATTRIBUTE_SET, 
-                    player.getName().getString(), attributeName, value);
+            sendSuccessMessage(context, MSG_ATTRIBUTE_INCREASED, 
+                    player.getName().getString(), attributeName, value, newValue);
+            return 1;
+        } else {
+            sendErrorMessage(context, MSG_OPERATION_FAILED);
+            return 0;
+        }
+    }
+    
+    /**
+     * 处理减少属性值命令
+     */
+    private static int decreaseAttributeCommand(
+            CommandContext<ServerCommandSource> context, 
+            ServerPlayerEntity player, 
+            String attributeName, 
+            int value) {
+        
+        if (value <= 0) {
+            sendErrorMessage(context, MSG_INVALID_VALUE, value);
+            return 0;
+        }
+        
+        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
+        
+        // 验证属性存在
+        if (!validateAttribute(context, attributeId)) {
+            return 0;
+        }
+        
+        // 获取当前值并验证
+        int currentValue = AttributeHelper.getAttributeValue(player, attributeId);
+        int minValue = AttributeHelper.getAttributeMinValue(attributeId);
+        
+        if (currentValue - value < minValue) {
+            sendErrorMessage(context, "无法减少属性，最小值为 %d，当前值为 %d，尝试减少 %d", 
+                    minValue, currentValue, value);
+            return 0;
+        }
+        
+        // 减少属性值
+        boolean success = AttributeHelper.addAttributeValue(player, attributeId, -value);
+        
+        if (success) {
+            int newValue = AttributeHelper.getAttributeValue(player, attributeId);
+            // 发送成功消息
+            sendSuccessMessage(context, MSG_ATTRIBUTE_DECREASED, 
+                    player.getName().getString(), attributeName, value, newValue);
             return 1;
         } else {
             sendErrorMessage(context, MSG_OPERATION_FAILED);
@@ -589,31 +658,6 @@ public class AttributeCommands {
         if (success) {
             // 发送成功消息
             sendSuccessMessage(context, MSG_POINTS_SET, player.getName().getString(), points);
-            return 1;
-        } else {
-            sendErrorMessage(context, MSG_OPERATION_FAILED);
-            return 0;
-        }
-    }
-    
-    /**
-     * 处理添加点数命令
-     */
-    private static int addPointsCommand(
-            CommandContext<ServerCommandSource> context, 
-            ServerPlayerEntity player, 
-            int points) {
-        
-        if (points <= 0) {
-            sendErrorMessage(context, MSG_INVALID_VALUE, points);
-            return 0;
-        }
-        
-        boolean success = AttributeHelper.addPoints(player, points);
-        
-        if (success) {
-            // 发送成功消息
-            sendSuccessMessage(context, MSG_POINTS_ADDED, player.getName().getString(), points);
             return 1;
         } else {
             sendErrorMessage(context, MSG_OPERATION_FAILED);
@@ -762,8 +806,10 @@ public class AttributeCommands {
     private static int showHelpCommand(CommandContext<ServerCommandSource> context) {
         sendInfoMessage(context, MSG_HELP_HEADER);
         sendInfoMessage(context, MSG_HELP_GET);
-        sendInfoMessage(context, MSG_HELP_SET);
+        sendInfoMessage(context, MSG_HELP_ATTR_INCREASE);
+        sendInfoMessage(context, MSG_HELP_ATTR_DECREASE);
         sendInfoMessage(context, MSG_HELP_POINTS);
+        sendInfoMessage(context, MSG_HELP_POINTS_SET);
         sendInfoMessage(context, MSG_HELP_POINTS_INCREASE);
         sendInfoMessage(context, MSG_HELP_POINTS_DECREASE);
         sendInfoMessage(context, MSG_HELP_MAX);
