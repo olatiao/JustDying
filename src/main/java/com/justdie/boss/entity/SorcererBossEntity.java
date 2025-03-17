@@ -23,6 +23,7 @@ import net.minecraft.entity.mob.PathAwareEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.world.World;
+import net.minecraft.util.math.Vec3d;
 
 import java.util.EnumSet;
 
@@ -86,6 +87,7 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         
         this.targetSelector.add(1, new RevengeGoal(this));
         this.targetSelector.add(2, new ActiveTargetGoal<>(this, PlayerEntity.class, true));
+        this.targetSelector.add(3, new TargetGoal<>(this, PlayerEntity.class, 10, true, false, null));
     }
     
     /**
@@ -196,6 +198,145 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         if (this.phaseTransitionTicks > 0) {
             this.phaseTransitionTicks--;
         }
+        
+        // 主动检查并尝试攻击玩家
+        tryAttackNearbyPlayers();
+    }
+    
+    /**
+     * 主动检查并尝试攻击附近的玩家
+     */
+    private void tryAttackNearbyPlayers() {
+        // 如果没有目标，但周围有玩家，尝试将其设为目标
+        if (this.getTarget() == null) {
+            // 寻找8-32格范围内的玩家
+            PlayerEntity nearestPlayer = this.getWorld().getClosestPlayer(
+                this.getX(), this.getY(), this.getZ(), 32.0, true);
+                
+            if (nearestPlayer != null) {
+                this.setTarget(nearestPlayer);
+            }
+        }
+        
+        // 当有目标但处于闲置状态时，尝试使用法术攻击
+        if (this.getTarget() != null && this.attackCooldown <= 0 && this.getCastState() == 0) {
+            // 根据与目标的距离选择合适的法术
+            double distanceToTarget = this.squaredDistanceTo(this.getTarget());
+            
+            if (distanceToTarget > 100.0) { // 10格以上距离
+                // 使用闪电法术
+                this.setCastState(LIGHTNING_CAST_STATE);
+                castLightningSpell(this.getTarget());
+            } else if (distanceToTarget > 36.0) { // 6格以上距离
+                // 使用火球法术
+                this.setCastState(FIREBALL_CAST_STATE);
+                castFireballSpell(this.getTarget());
+            } else if (this.getRandom().nextInt(10) == 0) { // 10%概率召唤
+                // 使用召唤法术
+                this.setCastState(SUMMON_CAST_STATE);
+                castSummonSpell();
+            }
+            
+            // 设置攻击冷却
+            this.attackCooldown = 40 + this.getRandom().nextInt(60); // 2-5秒冷却
+        }
+    }
+    
+    /**
+     * 施放闪电法术
+     */
+    private void castLightningSpell(LivingEntity target) {
+        if (target == null || !target.isAlive() || !(this.getWorld() instanceof ServerWorld)) {
+            return;
+        }
+        
+        ServerWorld serverWorld = (ServerWorld) this.getWorld();
+        
+        // 在目标位置附近创建闪电
+        net.minecraft.util.math.BlockPos targetPos = 
+            new net.minecraft.util.math.BlockPos((int)target.getX(), (int)target.getY(), (int)target.getZ());
+            
+        net.minecraft.entity.LightningEntity lightningBolt = 
+            net.minecraft.entity.EntityType.LIGHTNING_BOLT.create(serverWorld);
+            
+        if (lightningBolt != null) {
+            lightningBolt.refreshPositionAfterTeleport(targetPos.getX(), targetPos.getY(), targetPos.getZ());
+            serverWorld.spawnEntity(lightningBolt);
+        }
+    }
+    
+    /**
+     * 施放火球法术
+     */
+    private void castFireballSpell(LivingEntity target) {
+        if (target == null || !target.isAlive()) {
+            return;
+        }
+        
+        // 发射小火球
+        double dX = target.getX() - this.getX();
+        double dY = target.getBodyY(0.5) - this.getBodyY(0.5);
+        double dZ = target.getZ() - this.getZ();
+        
+        double strength = Math.sqrt(dX * dX + dY * dY + dZ * dZ);
+        
+        // 创建小火球实体
+        net.minecraft.entity.projectile.SmallFireballEntity fireball = 
+            new net.minecraft.entity.projectile.SmallFireballEntity(
+                this.getWorld(), this, 
+                dX / strength, dY / strength, dZ / strength);
+        
+        fireball.setPosition(
+            this.getX() + dX / strength, 
+            this.getBodyY(0.5) + 0.5, 
+            this.getZ() + dZ / strength);
+        
+        this.getWorld().spawnEntity(fireball);
+    }
+    
+    /**
+     * 施放召唤法术
+     */
+    private void castSummonSpell() {
+        if (!(this.getWorld() instanceof ServerWorld)) {
+            return;
+        }
+        
+        ServerWorld serverWorld = (ServerWorld) this.getWorld();
+        
+        // 召唤2-3个随机怪物 (如蜘蛛或僵尸)
+        int count = 2 + this.getRandom().nextInt(2);
+        
+        for (int i = 0; i < count; i++) {
+            net.minecraft.entity.mob.MobEntity minion = null;
+            
+            if (this.getRandom().nextBoolean()) {
+                // 召唤蜘蛛
+                minion = net.minecraft.entity.EntityType.SPIDER.create(serverWorld);
+            } else {
+                // 召唤僵尸
+                minion = net.minecraft.entity.EntityType.ZOMBIE.create(serverWorld);
+            }
+            
+            if (minion != null) {
+                // 在BOSS周围随机位置生成怪物
+                double offsetX = this.getRandom().nextDouble() * 3.0 - 1.5;
+                double offsetZ = this.getRandom().nextDouble() * 3.0 - 1.5;
+                
+                minion.refreshPositionAndAngles(
+                    this.getX() + offsetX,
+                    this.getY(),
+                    this.getZ() + offsetZ,
+                    this.getRandom().nextFloat() * 360.0F, 0.0F);
+                
+                // 如果BOSS有目标，让召唤的怪物也攻击同一目标
+                if (this.getTarget() != null) {
+                    minion.setTarget(this.getTarget());
+                }
+                
+                serverWorld.spawnEntityAndPassengers(minion);
+            }
+        }
     }
     
     // GeckoLib方法实现
@@ -252,7 +393,8 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
                    target.isAlive() && 
                    boss.attackCooldown <= 0 && 
                    boss.getCastState() == 0 &&
-                   boss.phaseTransitionTicks <= 0;
+                   boss.phaseTransitionTicks <= 0 &&
+                   boss.getRandom().nextInt(3) == 0; // 增加施法机会
         }
         
         @Override
@@ -344,6 +486,120 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             // 开始传送
             boss.setTeleporting(true);
             boss.teleportCooldown = 100; // 5秒冷却
+            
+            // 执行实际传送逻辑
+            this.attemptTeleport();
+        }
+        
+        /**
+         * 尝试进行传送
+         */
+        private void attemptTeleport() {
+            if (!(boss.getWorld() instanceof ServerWorld)) {
+                return;
+            }
+            
+            ServerWorld world = (ServerWorld) boss.getWorld();
+            LivingEntity target = boss.getTarget();
+            
+            if (target == null) {
+                // 如果没有目标，则传送回初始位置
+                if (boss.idlePosition != Vec3d.ZERO) {
+                    teleportToLocation(boss.idlePosition.x, boss.idlePosition.y, boss.idlePosition.z);
+                }
+                return;
+            }
+            
+            // 尝试20次找到一个安全的传送位置
+            for (int i = 0; i < 20; i++) {
+                // 计算传送距离和角度
+                double distance = boss.squaredDistanceTo(target) < 9.0 ? 
+                    // 如果太近则传送到8-10格远的地方
+                    8.0 + boss.getRandom().nextDouble() * 2.0 : 
+                    // 如果太远则传送到6-8格远的地方
+                    6.0 + boss.getRandom().nextDouble() * 2.0;
+                
+                // 随机角度
+                double angle = boss.getRandom().nextDouble() * Math.PI * 2.0;
+                
+                // 计算新坐标
+                double newX = target.getX() + Math.sin(angle) * distance;
+                double newZ = target.getZ() + Math.cos(angle) * distance;
+                
+                // 找到合适的Y坐标
+                int newY = findSuitableY(world, newX, newZ);
+                
+                if (newY > 0) {
+                    // 执行传送
+                    if (teleportToLocation(newX, newY, newZ)) {
+                        // 传送成功
+                        world.sendEntityStatus(boss, TELEPORT_STATE);
+                        return;
+                    }
+                }
+            }
+        }
+        
+        /**
+         * 在指定X,Z坐标找到合适的Y坐标
+         */
+        private int findSuitableY(ServerWorld world, double x, double z) {
+            // 获取区块
+            net.minecraft.util.math.BlockPos pos = new net.minecraft.util.math.BlockPos((int)x, 0, (int)z);
+            int maxY = world.getTopY();
+            
+            // 从上往下找第一个非空气方块
+            for (int y = Math.min(maxY, (int)boss.getY() + 15); y >= world.getBottomY(); y--) {
+                net.minecraft.util.math.BlockPos currentPos = new net.minecraft.util.math.BlockPos((int)x, y, (int)z);
+                net.minecraft.block.BlockState state = world.getBlockState(currentPos);
+                
+                if (!state.isAir() && state.isFullCube(world, currentPos) && 
+                    state.isSolidBlock(world, currentPos) && 
+                    world.isAir(currentPos.up()) && world.isAir(currentPos.up(2))) {
+                    return y + 1; // 返回方块上方的坐标
+                }
+            }
+            
+            return -1; // 未找到合适位置
+        }
+        
+        /**
+         * 将实体传送到指定坐标
+         */
+        private boolean teleportToLocation(double x, double y, double z) {
+            // 设置位置并刷新
+            boss.refreshPositionAndAngles(x, y, z, boss.getYaw(), boss.getPitch());
+            
+            // 特效和声音
+            if (boss.getWorld() instanceof ServerWorld serverWorld) {
+                // 在原位置产生紫色粒子
+                serverWorld.spawnParticles(
+                    net.minecraft.particle.ParticleTypes.PORTAL,
+                    boss.getX(), boss.getBodyY(0.5), boss.getZ(),
+                    30, 0.2, 0.2, 0.2, 0.0);
+                
+                // 播放末影人传送声音
+                serverWorld.playSound(
+                    null, boss.prevX, boss.prevY, boss.prevZ,
+                    net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                    net.minecraft.sound.SoundCategory.HOSTILE,
+                    1.0F, 1.0F);
+                    
+                // 在新位置产生紫色粒子
+                serverWorld.spawnParticles(
+                    net.minecraft.particle.ParticleTypes.PORTAL,
+                    boss.getX(), boss.getBodyY(0.5), boss.getZ(),
+                    30, 0.2, 0.2, 0.2, 0.0);
+                    
+                // 再次播放传送声音
+                serverWorld.playSound(
+                    null, boss.getX(), boss.getY(), boss.getZ(),
+                    net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                    net.minecraft.sound.SoundCategory.HOSTILE,
+                    1.0F, 1.0F);
+            }
+            
+            return true;
         }
     }
     
@@ -360,6 +616,30 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         @Override
         public void tick(ServerWorld world) {
             // 实现服务端逻辑
+        }
+    }
+
+    /**
+     * 自定义感知目标，增强BOSS主动发现并攻击玩家的能力
+     */
+    private class TargetGoal<T extends LivingEntity> extends ActiveTargetGoal<T> {
+        public TargetGoal(MobEntity mob, Class<T> targetClass, int reciprocalChance, boolean checkVisibility, boolean checkNavigable, java.util.function.Predicate<LivingEntity> targetPredicate) {
+            super(mob, targetClass, reciprocalChance, checkVisibility, checkNavigable, targetPredicate);
+        }
+        
+        @Override
+        public boolean canStart() {
+            // 确保目标选择不受其他AI影响
+            if (SorcererBossEntity.this.phaseTransitionTicks > 0) {
+                return false;
+            }
+            return super.canStart();
+        }
+        
+        @Override
+        protected double getFollowRange() {
+            // 扩大感知范围
+            return super.getFollowRange() * 1.5;
         }
     }
 } 
