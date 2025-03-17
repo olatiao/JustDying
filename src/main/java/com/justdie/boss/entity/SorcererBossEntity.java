@@ -87,7 +87,7 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         this.goalSelector.add(0, new SwimGoal(this));
         this.goalSelector.add(1, new SorcererCastSpellGoal(this));
         this.goalSelector.add(2, new SorcererTeleportGoal(this));
-        this.goalSelector.add(3, new SorcererKeepDistanceGoal(this));
+        this.goalSelector.add(3, new SorcererKeepDistanceGoal(this, 6.0, 10.0, 16.0, 1.0));
         this.goalSelector.add(4, new WanderAroundFarGoal(this, 1.0));
         this.goalSelector.add(5, new LookAtEntityGoal(this, PlayerEntity.class, 8.0F));
         this.goalSelector.add(6, new LookAroundGoal(this));
@@ -206,19 +206,41 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             this.phaseTransitionTicks--;
         }
 
-        // 强制攻击检测 - 确保BOSS始终能主动攻击玩家
-        if (this.getTarget() == null) {
-            // 更广泛搜索玩家（50格范围）
-            PlayerEntity nearestPlayer = this.getWorld().getClosestPlayer(
-                    this.getX(), this.getY(), this.getZ(), 50.0, true);
+        // 安全检查 - 检测BOSS是否被卡住或窒息
+        boolean isStuck = checkIfStuck(world);
+        if (isStuck && this.teleportCooldown <= 0) {
+            // 立即执行紧急传送
+            this.setTeleporting(true);
+            new SorcererTeleportGoal(this).emergencyTeleport();
+            this.teleportCooldown = 20; // 短冷却
+        }
 
-            if (nearestPlayer != null) {
-                this.setTarget(nearestPlayer);
+        // 防止倒地 - 保持实体垂直并限制Y轴速度
+        Vec3d velocity = this.getVelocity();
+        if (velocity.y < 0 && !this.isOnGround()) {
+            // 限制下落速度，防止下落过快
+            this.setVelocity(velocity.x, Math.max(velocity.y, -0.1), velocity.z);
+        }
+        
+        // 每10个tick检查一次姿势，确保实体保持直立
+        if (this.age % 10 == 0) {
+            this.setNoGravity(true); // 禁用重力
+            
+            // 如果没有目标且在空中，缓慢下降
+            if (!this.isOnGround() && this.getTarget() == null) {
+                this.setVelocity(0, -0.05, 0);
             }
         }
 
-        // 每4秒必然尝试施法一次
-        if (this.getTarget() != null && this.getCastState() == 0 && this.age % 80 == 0) {
+        // 强制攻击检测 - 确保BOSS始终能主动攻击玩家
+        // 每秒主动检查一次附近玩家
+        if (this.age % 20 == 0) {
+            // 即使已经有目标，也要检查是否有更近的玩家
+            forceAttackNearbyPlayers();
+        }
+
+        // 增加攻击频率 - 每2秒必然尝试施法一次
+        if (this.getTarget() != null && this.getCastState() == 0 && this.age % 40 == 0) {
             // 根据与目标的距离选择合适的法术
             double distanceToTarget = this.squaredDistanceTo(this.getTarget());
 
@@ -250,6 +272,42 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         // 确保实体姿势正确，防止倒地问题
         this.setPitch(0.0f);
         this.setBodyYaw(this.getYaw());
+    }
+
+    /**
+     * 检查BOSS是否被卡住或在窒息方块中
+     */
+    private boolean checkIfStuck(ServerWorld world) {
+        // 获取BOSS所在位置的方块状态
+        net.minecraft.util.math.BlockPos entityPos = this.getBlockPos();
+        net.minecraft.util.math.BlockPos headPos = entityPos.up();
+        
+        net.minecraft.block.BlockState blockState = world.getBlockState(entityPos);
+        net.minecraft.block.BlockState headBlockState = world.getBlockState(headPos);
+        
+        // 检查是否在树叶内 (被卡住)
+        boolean inLeaves = blockState.getBlock() instanceof net.minecraft.block.LeavesBlock ||
+                          headBlockState.getBlock() instanceof net.minecraft.block.LeavesBlock;
+        
+        // 检查是否在实心方块中 (窒息)
+        boolean suffocating = blockState.shouldSuffocate(world, entityPos) || 
+                             headBlockState.shouldSuffocate(world, headPos);
+        
+        // 检查是否无法移动 (速度几乎为0但仍有目标)
+        boolean cantMove = this.getVelocity().lengthSquared() < 0.01 && 
+                         this.getTarget() != null && 
+                         !this.isOnGround();
+        
+        // 如果有目标而且已经尝试移动但仍被卡住超过2秒
+        if (this.getTarget() != null && this.age % 40 == 0) {
+            // 检查是否处于碰撞中
+            boolean collidingWithBlocks = !world.isSpaceEmpty(this, this.getBoundingBox());
+            if (collidingWithBlocks) {
+                return true;
+            }
+        }
+        
+        return inLeaves || suffocating || (cantMove && this.age % 40 == 0);
     }
 
     // 覆盖移动相关方法，确保实体总是直立的
@@ -409,262 +467,35 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
     }
 
     /**
-     * 施法目标AI
+     * 保持距离AI
      */
-    class SorcererCastSpellGoal extends Goal {
+    class SorcererKeepDistanceGoal extends Goal {
         private final SorcererBossEntity boss;
-        private int spellCastTime;
-        private int spellCooldown;
+        private final double minDistance;
+        private final double optimalDistance;
+        private final double maxDistance;
+        private final double moveSpeed;
+        private final double strafeSpeed;
+        private boolean clockwise;
+        private int strafeTimer;
+        private int positionCheckTimer = 0; // 新增：位置检查计时器
 
-        public SorcererCastSpellGoal(SorcererBossEntity boss) {
+        public SorcererKeepDistanceGoal(SorcererBossEntity boss, double minDistance, double optimalDistance, double maxDistance, double moveSpeed) {
             this.boss = boss;
-            this.setControls(EnumSet.of(Goal.Control.MOVE, Goal.Control.LOOK));
-        }
-
-        @Override
-        public boolean canStart() {
-            LivingEntity target = this.boss.getTarget();
-            return target != null &&
-                    target.isAlive() &&
-                    boss.attackCooldown <= 0 &&
-                    boss.getCastState() == 0 &&
-                    boss.phaseTransitionTicks <= 0 &&
-                    boss.getRandom().nextInt(3) == 0; // 增加施法机会
-        }
-
-        @Override
-        public boolean shouldContinue() {
-            return this.spellCastTime > 0 &&
-                    this.boss.getTarget() != null &&
-                    this.boss.getTarget().isAlive();
-        }
-
-        @Override
-        public void start() {
-            this.spellCastTime = 60; // 3秒施法时间
-
-            // 随机选择一种施法类型
-            int spellType = boss.getRandom().nextInt(3) + 1; // 1-3
-            boss.setCastState(spellType);
-
-            // 根据阶段设置冷却时间
-            switch (boss.getCurrentPhase()) {
-                case PHASE_1:
-                    this.spellCooldown = 100; // 5秒
-                    break;
-                case PHASE_2:
-                    this.spellCooldown = 80; // 4秒
-                    break;
-                case PHASE_3:
-                    this.spellCooldown = 60; // 3秒
-                    break;
-            }
-        }
-
-        @Override
-        public void tick() {
-            this.spellCastTime--;
-
-            LivingEntity target = this.boss.getTarget();
-            if (target != null) {
-                // 施法期间看向目标
-                this.boss.getLookControl().lookAt(target, 30.0F, 30.0F);
-
-                // 施法期间减速移动
-                if (this.boss.squaredDistanceTo(target) > 64.0) { // 8格以上
-                    this.boss.getNavigation().startMovingTo(target, 0.5);
-                } else {
-                    this.boss.getNavigation().stop();
-                }
-            }
-        }
-
-        @Override
-        public void stop() {
-            this.boss.setCastState(0);
-            this.boss.attackCooldown = this.spellCooldown;
-        }
-    }
-
-    /**
-     * 传送目标AI
-     */
-    class SorcererTeleportGoal extends Goal {
-        private final SorcererBossEntity boss;
-
-        public SorcererTeleportGoal(SorcererBossEntity boss) {
-            this.boss = boss;
+            this.minDistance = minDistance;
+            this.optimalDistance = optimalDistance;
+            this.maxDistance = maxDistance;
+            this.moveSpeed = moveSpeed;
+            this.strafeSpeed = moveSpeed * 0.8;
             this.setControls(EnumSet.of(Goal.Control.MOVE));
         }
 
         @Override
         public boolean canStart() {
-            LivingEntity target = this.boss.getTarget();
-            if (target == null || !target.isAlive() || boss.teleportCooldown > 0) {
-                return false;
-            }
-
-            // 当处于危险时传送（血量低或被多个实体包围）
-            boolean isDangerous = boss.getHealth() < boss.getMaxHealth() * 0.3f ||
-                    boss.getWorld().getOtherEntities(boss, boss.getBoundingBox().expand(3.0),
-                            e -> e instanceof PlayerEntity).size() >= 2;
-
-            // 当目标太近或太远时传送
-            boolean badDistance = boss.squaredDistanceTo(target) < 9.0 || // 3格以内
-                    boss.squaredDistanceTo(target) > 256.0; // 16格以外
-
-            return (isDangerous || badDistance) && boss.getRandom().nextInt(30) == 0;
-        }
-
-        @Override
-        public void start() {
-            // 开始传送
-            boss.setTeleporting(true);
-            boss.teleportCooldown = 100; // 5秒冷却
-
-            // 执行实际传送逻辑
-            this.attemptTeleport();
-        }
-
-        /**
-         * 尝试进行传送
-         */
-        private void attemptTeleport() {
-            if (!(boss.getWorld() instanceof ServerWorld)) {
-                return;
-            }
-
-            ServerWorld world = (ServerWorld) boss.getWorld();
-            LivingEntity target = boss.getTarget();
-
-            if (target == null) {
-                // 如果没有目标，则传送回初始位置
-                if (boss.idlePosition != Vec3d.ZERO) {
-                    teleportToLocation(boss.idlePosition.x, boss.idlePosition.y, boss.idlePosition.z);
-                }
-                return;
-            }
-
-            // 尝试20次找到一个安全的传送位置
-            for (int i = 0; i < 20; i++) {
-                // 计算传送距离和角度
-                double distance = boss.squaredDistanceTo(target) < 9.0 ?
-                // 如果太近则传送到8-10格远的地方
-                        8.0 + boss.getRandom().nextDouble() * 2.0 :
-                        // 如果太远则传送到6-8格远的地方
-                        6.0 + boss.getRandom().nextDouble() * 2.0;
-
-                // 随机角度
-                double angle = boss.getRandom().nextDouble() * Math.PI * 2.0;
-
-                // 计算新坐标
-                double newX = target.getX() + Math.sin(angle) * distance;
-                double newZ = target.getZ() + Math.cos(angle) * distance;
-
-                // 找到合适的Y坐标
-                int newY = findSuitableY(world, newX, newZ);
-
-                if (newY > 0) {
-                    // 执行传送
-                    if (teleportToLocation(newX, newY, newZ)) {
-                        // 传送成功
-                        world.sendEntityStatus(boss, TELEPORT_STATE);
-                        return;
-                    }
-                }
-            }
-        }
-
-        /**
-         * 在指定X,Z坐标找到合适的Y坐标
-         */
-        private int findSuitableY(ServerWorld world, double x, double z) {
-            // 获取区块
-            net.minecraft.util.math.BlockPos pos = new net.minecraft.util.math.BlockPos((int) x, 0, (int) z);
-            int maxY = world.getTopY();
-
-            // 从上往下找第一个非空气方块
-            for (int y = Math.min(maxY, (int) boss.getY() + 15); y >= world.getBottomY(); y--) {
-                net.minecraft.util.math.BlockPos currentPos = new net.minecraft.util.math.BlockPos((int) x, y, (int) z);
-                net.minecraft.block.BlockState state = world.getBlockState(currentPos);
-
-                if (!state.isAir() && state.isFullCube(world, currentPos) &&
-                        state.isSolidBlock(world, currentPos) &&
-                        world.isAir(currentPos.up()) && world.isAir(currentPos.up(2))) {
-                    return y + 1; // 返回方块上方的坐标
-                }
-            }
-
-            return -1; // 未找到合适位置
-        }
-
-        /**
-         * 将实体传送到指定坐标
-         */
-        private boolean teleportToLocation(double x, double y, double z) {
-            // 设置位置并刷新
-            boss.refreshPositionAndAngles(x, y, z, boss.getYaw(), boss.getPitch());
-
-            // 特效和声音
-            if (boss.getWorld() instanceof ServerWorld serverWorld) {
-                // 在原位置产生紫色粒子
-                serverWorld.spawnParticles(
-                        net.minecraft.particle.ParticleTypes.PORTAL,
-                        boss.getX(), boss.getBodyY(0.5), boss.getZ(),
-                        30, 0.2, 0.2, 0.2, 0.0);
-
-                // 播放末影人传送声音
-                serverWorld.playSound(
-                        null, boss.prevX, boss.prevY, boss.prevZ,
-                        net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
-                        net.minecraft.sound.SoundCategory.HOSTILE,
-                        1.0F, 1.0F);
-
-                // 在新位置产生紫色粒子
-                serverWorld.spawnParticles(
-                        net.minecraft.particle.ParticleTypes.PORTAL,
-                        boss.getX(), boss.getBodyY(0.5), boss.getZ(),
-                        30, 0.2, 0.2, 0.2, 0.0);
-
-                // 再次播放传送声音
-                serverWorld.playSound(
-                        null, boss.getX(), boss.getY(), boss.getZ(),
-                        net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
-                        net.minecraft.sound.SoundCategory.HOSTILE,
-                        1.0F, 1.0F);
-            }
-
-            return true;
-        }
-    }
-
-    /**
-     * 保持与玩家的距离AI
-     */
-    class SorcererKeepDistanceGoal extends Goal {
-        private final SorcererBossEntity boss;
-        private final double minDistance = 6.0; // 最小距离（6格）
-        private final double optimalDistance = 10.0; // 最佳距离（10格）
-        private final double maxDistance = 16.0; // 最大距离（16格）
-        private final double moveSpeed = 1.0; // 移动速度
-        private final double strafeSpeed = 0.4; // 横向移动速度
-
-        private int strafeTimer = 0;
-        private boolean clockwise = false;
-
-        public SorcererKeepDistanceGoal(SorcererBossEntity boss) {
-            this.boss = boss;
-            this.setControls(EnumSet.of(Goal.Control.MOVE, Goal.Control.LOOK));
-        }
-
-        @Override
-        public boolean canStart() {
-            return boss.getTarget() != null && boss.getTarget().isAlive() && !boss.isTeleporting();
-        }
-
-        @Override
-        public boolean shouldContinue() {
-            return this.canStart() && boss.getCastState() == 0;
+            return boss.getTarget() != null && 
+                   boss.getTarget().isAlive() && 
+                   boss.getCastState() == 0 && // 不在施法状态
+                   boss.phaseTransitionTicks <= 0; // 不在相变状态
         }
 
         @Override
@@ -672,6 +503,7 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             // 随机初始化绕行方向
             this.clockwise = boss.getRandom().nextBoolean();
             this.strafeTimer = 0;
+            this.positionCheckTimer = 0; // 重置位置检查计时器
         }
 
         @Override
@@ -686,13 +518,23 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             // 计算与目标的距离
             double distSq = boss.squaredDistanceTo(target);
 
-            // 处理绕行计时器
+            // 处理绕行计时器 - 减少时间以增加方向变化频率
             if (this.strafeTimer-- <= 0) {
-                this.strafeTimer = 60 + boss.getRandom().nextInt(60); // 3-6秒
+                this.strafeTimer = 40 + boss.getRandom().nextInt(40); // 2-4秒
                 this.clockwise = !this.clockwise; // 切换绕行方向
             }
 
-            // 根据距离决定行动
+            // 位置检查 - 每秒检查一次是否被卡住
+            if (this.positionCheckTimer++ >= 20) {
+                this.positionCheckTimer = 0;
+                
+                // 如果实体被卡住（速度接近于0但有目标），尝试传送到更好的位置
+                if (boss.getVelocity().lengthSquared() < 0.01 && target != null) {
+                    tryRepositionIfStuck(target);
+                }
+            }
+
+            // 根据距离决定行动 - 更积极地保持最佳距离
             if (distSq < minDistance * minDistance) {
                 // 太近，需要远离
                 moveAwayFromTarget(target);
@@ -702,6 +544,34 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             } else {
                 // 保持在最佳范围内绕行
                 strafeAroundTarget(target);
+            }
+        }
+
+        /**
+         * 尝试重新定位如果实体被卡住
+         */
+        private void tryRepositionIfStuck(LivingEntity target) {
+            // 计算目标方向
+            double dx = target.getX() - boss.getX();
+            double dz = target.getZ() - boss.getZ();
+            double dist = Math.sqrt(dx * dx + dz * dz);
+            
+            if (dist < 0.1) return;
+            
+            // 标准化方向
+            double normalizedX = dx / dist;
+            double normalizedZ = dz / dist;
+            
+            // 计算理想距离的位置（在最佳距离处）
+            double idealX = target.getX() - normalizedX * optimalDistance;
+            double idealZ = target.getZ() - normalizedZ * optimalDistance;
+            
+            // 找到安全的Y坐标
+            int safeY = boss.findSafeY(boss.getWorld(), idealX, idealZ);
+            if (safeY > 0) {
+                // 直接移动到该位置
+                boss.refreshPositionAndAngles(idealX, safeY, idealZ, boss.getYaw(), 0);
+                boss.getNavigation().stop();
             }
         }
 
@@ -721,20 +591,20 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             double normalizedX = dx / dist;
             double normalizedZ = dz / dist;
 
-            double targetX = boss.getX() + normalizedX * 8.0; // 远离8格
-            double targetZ = boss.getZ() + normalizedZ * 8.0;
+            double targetX = boss.getX() + normalizedX * 10.0; // 远离10格，增加距离
+            double targetZ = boss.getZ() + normalizedZ * 10.0;
 
             // 找到合适的Y坐标
             int targetY = boss.findSafeY(boss.getWorld(), targetX, targetZ);
             if (targetY > 0) {
-                // 移动到该位置
-                boss.getNavigation().startMovingTo(targetX, targetY, targetZ, moveSpeed * 1.2); // 加速远离
+                // 移动到该位置，增加速度
+                boss.getNavigation().startMovingTo(targetX, targetY, targetZ, moveSpeed * 1.5); 
             } else {
                 // 随机选择新方向
                 double angle = boss.getRandom().nextDouble() * Math.PI * 2;
-                targetX = boss.getX() + Math.sin(angle) * 8.0;
-                targetZ = boss.getZ() + Math.cos(angle) * 8.0;
-                boss.getNavigation().startMovingTo(targetX, boss.getY(), targetZ, moveSpeed * 1.2);
+                targetX = boss.getX() + Math.sin(angle) * 10.0;
+                targetZ = boss.getZ() + Math.cos(angle) * 10.0;
+                boss.getNavigation().startMovingTo(targetX, boss.getY(), targetZ, moveSpeed * 1.5);
             }
         }
 
@@ -816,6 +686,7 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
      */
     private class SorcererServerTick implements IEntityTick<ServerWorld> {
         private final SorcererBossEntity boss;
+        private int attackTick = 0;
 
         public SorcererServerTick(SorcererBossEntity boss) {
             this.boss = boss;
@@ -823,7 +694,36 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
 
         @Override
         public void tick(ServerWorld world) {
-            // 实现服务端逻辑
+            // 额外的攻击检查，确保AI行为正常
+            attackTick++;
+            
+            // 如果5秒内没有攻击过，强制尝试攻击
+            if (attackTick >= 100) {
+                attackTick = 0;
+                
+                // 检查是否有目标
+                if (boss.getTarget() == null || !boss.getTarget().isAlive()) {
+                    boss.forceAttackNearbyPlayers();
+                } else {
+                    // 有目标但没在攻击，强制施法
+                    if (boss.getCastState() == 0 && boss.attackCooldown <= 0) {
+                        LivingEntity target = boss.getTarget();
+                        double distSq = boss.squaredDistanceTo(target);
+                        
+                        // 根据距离选择法术
+                        int spellType;
+                        if (distSq < 36) {
+                            spellType = LIGHTNING_CAST_STATE;
+                        } else {
+                            spellType = FIREBALL_CAST_STATE;
+                        }
+                        
+                        boss.setCastState(spellType);
+                        boss.executeSpell(spellType);
+                        boss.attackCooldown = 20;
+                    }
+                }
+            }
         }
     }
 
@@ -1165,5 +1065,470 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
     public Vec3d getLeashOffset() {
         // 确保缰绳连接点保持在合理位置
         return new Vec3d(0, 1.2, 0);
+    }
+
+    /**
+     * 强制攻击附近的玩家，确保BOSS主动性
+     */
+    private void forceAttackNearbyPlayers() {
+        // 扩大搜索范围到64格，更主动地发现玩家
+        PlayerEntity nearestPlayer = this.getWorld().getClosestPlayer(
+                this.getX(), this.getY(), this.getZ(), 64.0, true);
+
+        if (nearestPlayer != null) {
+            // 检查当前目标是否存在且更近
+            LivingEntity currentTarget = this.getTarget();
+            if (currentTarget != null && currentTarget.isAlive()) {
+                double currentDistSq = this.squaredDistanceTo(currentTarget);
+                double newDistSq = this.squaredDistanceTo(nearestPlayer);
+                
+                // 如果新玩家更近，或者原目标超出攻击范围，则更新目标
+                if (newDistSq < currentDistSq || currentDistSq > 40*40) {
+                    this.setTarget(nearestPlayer);
+                }
+            } else {
+                // 如果没有当前目标，直接设置新目标
+                this.setTarget(nearestPlayer);
+            }
+            
+            // 如果玩家太远，立即尝试施放远程攻击
+            double distanceToTarget = this.squaredDistanceTo(nearestPlayer);
+            if (distanceToTarget > 100.0 && this.getCastState() == 0 && this.attackCooldown <= 0) {
+                this.setCastState(LIGHTNING_CAST_STATE);
+                executeSpell(LIGHTNING_CAST_STATE);
+                this.attackCooldown = 20;
+            }
+        }
+    }
+
+    /**
+     * 施法目标AI
+     */
+    class SorcererCastSpellGoal extends Goal {
+        private final SorcererBossEntity boss;
+        private int spellCastTime;
+        private int spellCooldown;
+        private int forcedCastCounter = 0; // 新增：强制施法计数器
+
+        public SorcererCastSpellGoal(SorcererBossEntity boss) {
+            this.boss = boss;
+            this.setControls(EnumSet.of(Goal.Control.MOVE, Goal.Control.LOOK));
+        }
+
+        @Override
+        public boolean canStart() {
+            LivingEntity target = this.boss.getTarget();
+            
+            // 增加强制施法逻辑
+            forcedCastCounter++;
+            boolean forcedCast = forcedCastCounter >= 60; // 每3秒强制尝试施法一次
+            
+            return (target != null &&
+                    target.isAlive() &&
+                    boss.attackCooldown <= 0 &&
+                    boss.getCastState() == 0 &&
+                    boss.phaseTransitionTicks <= 0 &&
+                    (boss.getRandom().nextInt(3) < 2 || forcedCast)); // 增加施法机会到66%或强制施法
+        }
+
+        @Override
+        public boolean shouldContinue() {
+            return this.spellCastTime > 0 &&
+                    this.boss.getTarget() != null &&
+                    this.boss.getTarget().isAlive();
+        }
+
+        @Override
+        public void start() {
+            this.spellCastTime = 30; // 减少到1.5秒施法时间，加快节奏
+            this.forcedCastCounter = 0; // 重置强制施法计数器
+            
+            LivingEntity target = boss.getTarget();
+            int spellType;
+            
+            // 根据与目标的距离选择合适的法术
+            if (target != null) {
+                double distSq = boss.squaredDistanceTo(target);
+                
+                if (distSq < 36) { // 6格以内
+                    // 近距离优先使用闪电法术
+                    spellType = LIGHTNING_CAST_STATE;
+                } else if (distSq > 100) { // 10格以外
+                    // 远距离优先使用火球法术
+                    spellType = FIREBALL_CAST_STATE;
+                } else {
+                    // 中等距离随机选择，但增加召唤的概率
+                    if (boss.getRandom().nextInt(10) < 3) { // 30%几率召唤
+                        spellType = SUMMON_CAST_STATE;
+                    } else {
+                        // 其他情况随机选择火球或闪电
+                        spellType = boss.getRandom().nextBoolean() ? 
+                                    FIREBALL_CAST_STATE : LIGHTNING_CAST_STATE;
+                    }
+                }
+            } else {
+                // 没有目标时随机选择
+                spellType = boss.getRandom().nextInt(3) + 1; // 1-3
+            }
+            
+            boss.setCastState(spellType);
+
+            // 根据阶段设置冷却时间，减少冷却时间以增加攻击频率
+            switch (boss.getCurrentPhase()) {
+                case PHASE_1:
+                    this.spellCooldown = 40; // 2秒
+                    break;
+                case PHASE_2:
+                    this.spellCooldown = 30; // 1.5秒
+                    break;
+                case PHASE_3:
+                    this.spellCooldown = 20; // 1秒
+                    break;
+            }
+        }
+
+        @Override
+        public void tick() {
+            this.spellCastTime--;
+
+            LivingEntity target = this.boss.getTarget();
+            if (target != null) {
+                // 施法期间看向目标
+                this.boss.getLookControl().lookAt(target, 30.0F, 30.0F);
+
+                // 施法期间减速移动，但不要完全停止
+                if (this.boss.squaredDistanceTo(target) > 100.0) { // 10格以上
+                    this.boss.getNavigation().startMovingTo(target, 0.5);
+                } else if (this.boss.squaredDistanceTo(target) < 16.0) { // 4格以内
+                    // 太近时后退
+                    double dx = this.boss.getX() - target.getX();
+                    double dz = this.boss.getZ() - target.getZ();
+                    double dist = Math.sqrt(dx * dx + dz * dz);
+                    
+                    if (dist > 0.1) {
+                        double moveX = this.boss.getX() + (dx / dist) * 2.0;
+                        double moveZ = this.boss.getZ() + (dz / dist) * 2.0;
+                        this.boss.getNavigation().startMovingTo(moveX, this.boss.getY(), moveZ, 0.5);
+                    }
+                } else {
+                    // 适当距离时停止移动，专注施法
+                    this.boss.getNavigation().stop();
+                }
+            }
+        }
+
+        @Override
+        public void stop() {
+            this.boss.setCastState(0);
+            this.boss.attackCooldown = this.spellCooldown;
+        }
+    }
+
+    /**
+     * 传送目标AI
+     */
+    class SorcererTeleportGoal extends Goal {
+        private final SorcererBossEntity boss;
+
+        public SorcererTeleportGoal(SorcererBossEntity boss) {
+            this.boss = boss;
+            this.setControls(EnumSet.of(Goal.Control.MOVE));
+        }
+
+        @Override
+        public boolean canStart() {
+            LivingEntity target = this.boss.getTarget();
+            if (target == null || !target.isAlive() || boss.teleportCooldown > 0) {
+                return false;
+            }
+
+            // 当处于危险时传送（血量低或被多个实体包围）
+            boolean isDangerous = boss.getHealth() < boss.getMaxHealth() * 0.3f ||
+                    boss.getWorld().getOtherEntities(boss, boss.getBoundingBox().expand(3.0),
+                            e -> e instanceof PlayerEntity).size() >= 2;
+
+            // 当目标太近或太远时传送
+            boolean badDistance = boss.squaredDistanceTo(target) < 12.0 || // 3.5格以内
+                    boss.squaredDistanceTo(target) > 196.0; // 14格以外
+
+            // 提高传送概率 - 从5%增加到10%
+            return (isDangerous || badDistance) && boss.getRandom().nextInt(10) == 0;
+        }
+
+        @Override
+        public void start() {
+            // 开始传送
+            boss.setTeleporting(true);
+            boss.teleportCooldown = 60; // 减少冷却到3秒
+
+            // 执行实际传送逻辑
+            this.attemptTeleport();
+        }
+
+        /**
+         * 紧急传送 - 无视常规检查，立即传送到安全位置
+         */
+        private void emergencyTeleport() {
+            if (!(boss.getWorld() instanceof ServerWorld)) {
+                return;
+            }
+
+            ServerWorld world = (ServerWorld) boss.getWorld();
+            LivingEntity target = boss.getTarget();
+            
+            // 尝试传送到目标附近(如果有目标)
+            if (target != null) {
+                // 先尝试传送到目标附近
+                if (teleportNearTarget(target, world)) {
+                    return;
+                }
+            }
+            
+            // 如果没有目标或无法传送到目标附近，尝试传送到随机安全位置
+            for (int i = 0; i < 30; i++) { // 增加尝试次数
+                double distance = 8.0 + boss.getRandom().nextDouble() * 8.0; // 8-16格范围
+                double angle = boss.getRandom().nextDouble() * Math.PI * 2.0;
+                
+                // 计算新坐标
+                double currentX = boss.getX();
+                double currentZ = boss.getZ();
+                
+                double newX = currentX + Math.sin(angle) * distance;
+                double newZ = currentZ + Math.cos(angle) * distance;
+                
+                // 找到合适的Y坐标，并且确保传送位置安全
+                int newY = findSafeLocation(world, newX, newZ);
+                
+                if (newY > 0) {
+                    if (teleportToLocation(newX, newY, newZ)) {
+                        world.sendEntityStatus(boss, TELEPORT_STATE);
+                        return;
+                    }
+                }
+            }
+            
+            // 最后的紧急措施：如果还是找不到安全位置，尝试传送到高空
+            double newX = boss.getX() + (boss.getRandom().nextDouble() - 0.5) * 16.0;
+            double newZ = boss.getZ() + (boss.getRandom().nextDouble() - 0.5) * 16.0;
+            int surfaceY = world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, (int)newX, (int)newZ);
+            
+            if (surfaceY > 0) {
+                // 传送到地表上方一些距离，避免被卡住
+                teleportToLocation(newX, surfaceY + 2, newZ);
+                world.sendEntityStatus(boss, TELEPORT_STATE);
+            }
+        }
+
+        /**
+         * 在指定X,Z坐标找到合适的Y坐标，并确保位置安全
+         */
+        private int findSafeLocation(ServerWorld world, double x, double z) {
+            int maxY = world.getTopY();
+            int startY = Math.min(maxY, Math.max((int)boss.getY() + 10, 
+                    world.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING, (int)x, (int)z)));
+            
+            // 从上往下找安全位置
+            for (int y = startY; y >= world.getBottomY(); y--) {
+                net.minecraft.util.math.BlockPos pos = new net.minecraft.util.math.BlockPos((int)x, y, (int)z);
+                net.minecraft.util.math.BlockPos posAbove = pos.up();
+                net.minecraft.util.math.BlockPos posAbove2 = pos.up(2);
+                
+                net.minecraft.block.BlockState state = world.getBlockState(pos);
+                net.minecraft.block.BlockState stateAbove = world.getBlockState(posAbove);
+                net.minecraft.block.BlockState stateAbove2 = world.getBlockState(posAbove2);
+                
+                // 检查是否是安全的方块类型
+                boolean solidBase = !state.isAir() && 
+                                    state.isFullCube(world, pos) && 
+                                    !(state.getBlock() instanceof net.minecraft.block.LeavesBlock) &&
+                                    !state.shouldSuffocate(world, pos);
+                
+                boolean safeSpace = stateAbove.isAir() && stateAbove2.isAir();
+                
+                if (solidBase && safeSpace) {
+                    // 额外检查上方是否有任何固体方块
+                    boolean clearPath = true;
+                    for (int checkY = 3; checkY <= 5; checkY++) {
+                        net.minecraft.block.BlockState checkState = world.getBlockState(pos.up(checkY));
+                        if (!checkState.isAir() && !(checkState.getBlock() instanceof net.minecraft.block.LeavesBlock)) {
+                            clearPath = false;
+                            break;
+                        }
+                    }
+                    
+                    if (clearPath) {
+                        return y + 1; // 返回方块上方的坐标
+                    }
+                }
+            }
+            
+            return -1; // 未找到合适位置
+        }
+
+        private boolean teleportNearTarget(LivingEntity target, ServerWorld world) {
+            // 优先传送到目标背后
+            double targetYaw = target.getYaw() * Math.PI / 180.0; // 转换为弧度
+            double offsetX = -Math.sin(targetYaw) * 6.0; // 在目标背后6格
+            double offsetZ = -Math.cos(targetYaw) * 6.0;
+            
+            double newX = target.getX() + offsetX;
+            double newZ = target.getZ() + offsetZ;
+            
+            // 使用更严格的安全位置检查
+            int newY = findSafeLocation(world, newX, newZ);
+            
+            if (newY > 0) {
+                if (teleportToLocation(newX, newY, newZ)) {
+                    world.sendEntityStatus(boss, TELEPORT_STATE);
+                    return true;
+                }
+            }
+            
+            // 如果无法传送到背后，尝试传送到目标侧面
+            double[] angles = {Math.PI/2, -Math.PI/2, 2*Math.PI/3, -2*Math.PI/3}; // 不同的角度
+            
+            for (double angleOffset : angles) {
+                double angle = targetYaw + angleOffset;
+                offsetX = -Math.sin(angle) * 5.0; // 距离减少到5格
+                offsetZ = -Math.cos(angle) * 5.0;
+                
+                newX = target.getX() + offsetX;
+                newZ = target.getZ() + offsetZ;
+                
+                // 使用更严格的安全位置检查
+                newY = findSafeLocation(world, newX, newZ);
+                
+                if (newY > 0) {
+                    if (teleportToLocation(newX, newY, newZ)) {
+                        world.sendEntityStatus(boss, TELEPORT_STATE);
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        }
+
+        /**
+         * 尝试进行传送
+         */
+        private void attemptTeleport() {
+            if (!(boss.getWorld() instanceof ServerWorld)) {
+                return;
+            }
+
+            ServerWorld world = (ServerWorld) boss.getWorld();
+            LivingEntity target = boss.getTarget();
+
+            if (target == null) {
+                // 如果没有目标，则传送回初始位置
+                if (boss.idlePosition != Vec3d.ZERO) {
+                    teleportToLocation(boss.idlePosition.x, boss.idlePosition.y, boss.idlePosition.z);
+                }
+                return;
+            }
+
+            // 优先尝试传送到目标附近的位置
+            if (teleportNearTarget(target, world)) {
+                return;
+            }
+
+            // 如果无法传送到目标附近，尝试25次找到一个安全的传送位置
+            for (int i = 0; i < 25; i++) {
+                // 计算传送距离和角度
+                double distance = boss.squaredDistanceTo(target) < 9.0 ?
+                // 如果太近则传送到8-10格远的地方
+                        8.0 + boss.getRandom().nextDouble() * 2.0 :
+                        // 如果太远则传送到6-8格远的地方
+                        6.0 + boss.getRandom().nextDouble() * 2.0;
+
+                // 随机角度
+                double angle = boss.getRandom().nextDouble() * Math.PI * 2.0;
+
+                // 计算新坐标
+                double newX = target.getX() + Math.sin(angle) * distance;
+                double newZ = target.getZ() + Math.cos(angle) * distance;
+
+                // 使用更安全的位置查找方法
+                int newY = findSafeLocation(world, newX, newZ);
+
+                if (newY > 0) {
+                    // 执行传送
+                    if (teleportToLocation(newX, newY, newZ)) {
+                        // 传送成功
+                        world.sendEntityStatus(boss, TELEPORT_STATE);
+                        return;
+                    }
+                }
+            }
+            
+            // 如果所有尝试都失败，尝试紧急传送
+            emergencyTeleport();
+        }
+
+        /**
+         * 将实体传送到指定坐标，并在传送后进行额外的安全检查
+         */
+        private boolean teleportToLocation(double x, double y, double z) {
+            // 保存原始位置，以便在传送不安全时能够回退
+            double oldX = boss.getX();
+            double oldY = boss.getY();
+            double oldZ = boss.getZ();
+            
+            // 设置位置并刷新
+            boss.refreshPositionAndAngles(x, y, z, boss.getYaw(), boss.getPitch());
+            
+            // 获取所在世界
+            ServerWorld serverWorld = null;
+            if (boss.getWorld() instanceof ServerWorld) {
+                serverWorld = (ServerWorld) boss.getWorld();
+                
+                // 安全检查：确认新位置不在实体方块内
+                net.minecraft.util.math.BlockPos newPos = boss.getBlockPos();
+                net.minecraft.util.math.BlockPos headPos = newPos.up();
+                
+                net.minecraft.block.BlockState blockState = serverWorld.getBlockState(newPos);
+                net.minecraft.block.BlockState headBlockState = serverWorld.getBlockState(headPos);
+                
+                boolean unsafe = (blockState.shouldSuffocate(serverWorld, newPos) || 
+                                  headBlockState.shouldSuffocate(serverWorld, headPos) ||
+                                  blockState.getBlock() instanceof net.minecraft.block.LeavesBlock ||
+                                  headBlockState.getBlock() instanceof net.minecraft.block.LeavesBlock);
+                
+                // 如果新位置不安全，回退到原始位置
+                if (unsafe) {
+                    boss.refreshPositionAndAngles(oldX, oldY, oldZ, boss.getYaw(), boss.getPitch());
+                    return false;
+                }
+                
+                // 在原位置产生紫色粒子
+                serverWorld.spawnParticles(
+                        net.minecraft.particle.ParticleTypes.PORTAL,
+                        oldX, boss.getBodyY(0.5), oldZ,
+                        30, 0.2, 0.2, 0.2, 0.0);
+
+                // 播放末影人传送声音
+                serverWorld.playSound(
+                        null, oldX, oldY, oldZ,
+                        net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                        net.minecraft.sound.SoundCategory.HOSTILE,
+                        1.0F, 1.0F);
+
+                // 在新位置产生紫色粒子
+                serverWorld.spawnParticles(
+                        net.minecraft.particle.ParticleTypes.PORTAL,
+                        boss.getX(), boss.getBodyY(0.5), boss.getZ(),
+                        30, 0.2, 0.2, 0.2, 0.0);
+
+                // 再次播放传送声音
+                serverWorld.playSound(
+                        null, boss.getX(), boss.getY(), boss.getZ(),
+                        net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                        net.minecraft.sound.SoundCategory.HOSTILE,
+                        1.0F, 1.0F);
+            }
+
+            return true;
+        }
     }
 }
