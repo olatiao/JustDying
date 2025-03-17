@@ -199,46 +199,71 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             this.phaseTransitionTicks--;
         }
         
-        // 主动检查并尝试攻击玩家
-        tryAttackNearbyPlayers();
+        // 强制进行攻击检测，确保BOSS始终能主动攻击玩家
+        forceAttackNearbyPlayers();
     }
     
     /**
-     * 主动检查并尝试攻击附近的玩家
+     * 强制进行攻击检测，确保BOSS始终能主动攻击玩家
      */
-    private void tryAttackNearbyPlayers() {
-        // 如果没有目标，但周围有玩家，尝试将其设为目标
+    private void forceAttackNearbyPlayers() {
+        // 积极查找并设置目标
         if (this.getTarget() == null) {
-            // 寻找8-32格范围内的玩家
+            // 更广泛搜索玩家（50格范围）
             PlayerEntity nearestPlayer = this.getWorld().getClosestPlayer(
-                this.getX(), this.getY(), this.getZ(), 32.0, true);
+                this.getX(), this.getY(), this.getZ(), 50.0, true);
                 
             if (nearestPlayer != null) {
                 this.setTarget(nearestPlayer);
             }
         }
         
-        // 当有目标但处于闲置状态时，尝试使用法术攻击
-        if (this.getTarget() != null && this.attackCooldown <= 0 && this.getCastState() == 0) {
+        // 只要有目标，积极施放法术(确保动作执行)
+        if (this.getTarget() != null && this.getCastState() == 0) {
+            // 必须重置攻击冷却，防止逻辑被阻断
+            this.attackCooldown = 0;
+            
             // 根据与目标的距离选择合适的法术
             double distanceToTarget = this.squaredDistanceTo(this.getTarget());
             
-            if (distanceToTarget > 100.0) { // 10格以上距离
-                // 使用闪电法术
-                this.setCastState(LIGHTNING_CAST_STATE);
-                castLightningSpell(this.getTarget());
-            } else if (distanceToTarget > 36.0) { // 6格以上距离
-                // 使用火球法术
-                this.setCastState(FIREBALL_CAST_STATE);
-                castFireballSpell(this.getTarget());
-            } else if (this.getRandom().nextInt(10) == 0) { // 10%概率召唤
-                // 使用召唤法术
-                this.setCastState(SUMMON_CAST_STATE);
-                castSummonSpell();
+            // 使用更积极的施法策略
+            if (this.age % 100 == 0) { // 每5秒必然尝试施法一次
+                if (distanceToTarget > 100.0) { // 10格以上距离
+                    // 使用闪电法术
+                    this.setCastState(LIGHTNING_CAST_STATE);
+                    executeSpell(LIGHTNING_CAST_STATE);
+                } else if (distanceToTarget > 36.0) { // 6格以上距离
+                    // 使用火球法术
+                    this.setCastState(FIREBALL_CAST_STATE);
+                    executeSpell(FIREBALL_CAST_STATE);
+                } else { // 近距离
+                    // 使用召唤法术
+                    this.setCastState(SUMMON_CAST_STATE);
+                    executeSpell(SUMMON_CAST_STATE);
+                }
+                
+                // 设置适当的冷却
+                this.attackCooldown = 20; // 1秒
             }
-            
-            // 设置攻击冷却
-            this.attackCooldown = 40 + this.getRandom().nextInt(60); // 2-5秒冷却
+        }
+    }
+    
+    /**
+     * 执行指定类型的法术，确保动作有效
+     */
+    private void executeSpell(int spellType) {
+        if (this.getTarget() == null) return;
+        
+        switch(spellType) {
+            case FIREBALL_CAST_STATE:
+                castFireballSpell(this.getTarget());
+                break;
+            case LIGHTNING_CAST_STATE:
+                castLightningSpell(this.getTarget());
+                break;
+            case SUMMON_CAST_STATE:
+                castSummonSpell();
+                break;
         }
     }
     
@@ -252,16 +277,20 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         
         ServerWorld serverWorld = (ServerWorld) this.getWorld();
         
-        // 在目标位置附近创建闪电
-        net.minecraft.util.math.BlockPos targetPos = 
-            new net.minecraft.util.math.BlockPos((int)target.getX(), (int)target.getY(), (int)target.getZ());
+        // 在目标位置附近创建闪电 - 直接使用目标坐标
+        double targetX = target.getX();
+        double targetY = target.getY();
+        double targetZ = target.getZ();
             
         net.minecraft.entity.LightningEntity lightningBolt = 
             net.minecraft.entity.EntityType.LIGHTNING_BOLT.create(serverWorld);
             
         if (lightningBolt != null) {
-            lightningBolt.refreshPositionAfterTeleport(targetPos.getX(), targetPos.getY(), targetPos.getZ());
+            lightningBolt.refreshPositionAndAngles(targetX, targetY, targetZ, 0, 0);
             serverWorld.spawnEntity(lightningBolt);
+            
+            // 添加伤害效果
+            target.damage(this.getDamageSources().indirectMagic(this, this), 8.0f);
         }
     }
     
@@ -273,25 +302,56 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             return;
         }
         
-        // 发射小火球
+        // 发射小火球 - 确保方向和速度正确
         double dX = target.getX() - this.getX();
         double dY = target.getBodyY(0.5) - this.getBodyY(0.5);
         double dZ = target.getZ() - this.getZ();
         
-        double strength = Math.sqrt(dX * dX + dY * dY + dZ * dZ);
+        double distance = Math.sqrt(dX * dX + dY * dY + dZ * dZ);
+        
+        if (distance < 0.1) return; // 防止除零错误
         
         // 创建小火球实体
         net.minecraft.entity.projectile.SmallFireballEntity fireball = 
             new net.minecraft.entity.projectile.SmallFireballEntity(
-                this.getWorld(), this, 
-                dX / strength, dY / strength, dZ / strength);
+                this.getWorld(), 
+                this.getX(), 
+                this.getBodyY(0.5), 
+                this.getZ(),
+                dX / distance, 
+                dY / distance, 
+                dZ / distance);
         
-        fireball.setPosition(
-            this.getX() + dX / strength, 
-            this.getBodyY(0.5) + 0.5, 
-            this.getZ() + dZ / strength);
+        // 设置火球的所有者为BOSS
+        fireball.setOwner(this);
         
+        // 直接添加到世界
         this.getWorld().spawnEntity(fireball);
+        
+        // 为了确保效果，再发射两个火球
+        for (int i = 0; i < 2; i++) {
+            // 添加一些随机偏移
+            double offsetX = dX / distance + (this.getRandom().nextDouble() - 0.5) * 0.2;
+            double offsetY = dY / distance + (this.getRandom().nextDouble() - 0.5) * 0.2;
+            double offsetZ = dZ / distance + (this.getRandom().nextDouble() - 0.5) * 0.2;
+            
+            // 标准化方向向量
+            double offsetMag = Math.sqrt(offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ);
+            
+            if (offsetMag > 0.1) { // 防止除零
+                fireball = new net.minecraft.entity.projectile.SmallFireballEntity(
+                    this.getWorld(), 
+                    this.getX(), 
+                    this.getBodyY(0.5), 
+                    this.getZ(),
+                    offsetX / offsetMag, 
+                    offsetY / offsetMag, 
+                    offsetZ / offsetMag);
+                
+                fireball.setOwner(this);
+                this.getWorld().spawnEntity(fireball);
+            }
+        }
     }
     
     /**
@@ -342,7 +402,7 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
     // GeckoLib方法实现
     @Override
     public void registerControllers(AnimatableManager.ControllerRegistrar controllers) {
-        controllers.add(new AnimationController<>(this, "controller", 5, this::handleAnimations));
+        controllers.add(new AnimationController<>(this, "controller", 2, this::handleAnimations));
     }
     
     private PlayState handleAnimations(AnimationState<SorcererBossEntity> state) {
@@ -358,7 +418,7 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
         } else if (castState == SUMMON_CAST_STATE) {
             return state.setAndContinue(ANIM_CAST_SUMMON);
         } else {
-            // 默认闲置动画
+            // 确保实体始终播放闲置动画
             return state.setAndContinue(ANIM_IDLE);
         }
     }
