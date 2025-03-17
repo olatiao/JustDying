@@ -82,7 +82,7 @@ public class JustDyingConfig implements ConfigData {
                 public boolean showAffixTooltips = true;
 
                 @ConfigEntry.Gui.CollapsibleObject
-                public DefaultAffixes defaultAffixes = new DefaultAffixes();
+                public PresetAffixes presetAffixes = new PresetAffixes();
         }
 
         public static class AttributeCapItemsConfig {
@@ -95,11 +95,6 @@ public class JustDyingConfig implements ConfigData {
         }
 
         public static class AttributeConfig {
-                // 属性类型枚举，用于区分默认和自定义属性
-                public enum AttributeType {
-                        DEFAULT, CUSTOM
-                }
-                
                 @ConfigEntry.Gui.Tooltip
                 public String name = "";
 
@@ -119,17 +114,13 @@ public class JustDyingConfig implements ConfigData {
                 public int maxValue = 20;
 
                 @ConfigEntry.BoundedDiscrete(min = 0, max = 1000)
-                public int defaultValue = 0;
+                public int initialValue = 0;
 
                 @ConfigEntry.Gui.Tooltip
                 public float valueMultiplier = 1.0f;
 
                 @ConfigEntry.Gui.Tooltip
                 public boolean enabled = true;
-
-                @ConfigEntry.Gui.Tooltip
-                @ConfigEntry.Gui.EnumHandler(option = ConfigEntry.Gui.EnumHandler.EnumDisplayOption.BUTTON)
-                public AttributeType type = AttributeType.CUSTOM; // 替代原来的isDefault标志
 
                 @ConfigEntry.Gui.Tooltip
                 public boolean enableCapItem = false; // 是否启用该属性的上限增加物品
@@ -142,18 +133,17 @@ public class JustDyingConfig implements ConfigData {
                 }
 
                 public AttributeConfig(String name, String description, String iconItem, String vanillaAttribute,
-                                int minValue, int maxValue, int defaultValue, float valueMultiplier,
-                                boolean isDefault, boolean enableCapItem, String capItemId) {
+                                int minValue, int maxValue, int initialValue, float valueMultiplier,
+                                boolean enableCapItem, String capItemId) {
                         this.name = name;
                         this.description = description;
                         this.iconItem = iconItem;
                         this.vanillaAttribute = vanillaAttribute;
                         this.minValue = minValue;
                         this.maxValue = maxValue;
-                        this.defaultValue = defaultValue;
+                        this.initialValue = initialValue;
                         this.valueMultiplier = valueMultiplier;
                         this.enabled = true;
-                        this.type = isDefault ? AttributeType.DEFAULT : AttributeType.CUSTOM;
                         this.enableCapItem = enableCapItem;
                         this.capItemId = capItemId;
                 }
@@ -165,20 +155,12 @@ public class JustDyingConfig implements ConfigData {
                 public boolean isValid() {
                         return !name.isEmpty() && maxValue > minValue;
                 }
-                
-                /**
-                 * 判断是否为默认属性
-                 * @return 是否为默认属性
-                 */
-                public boolean isDefault() {
-                        return type == AttributeType.DEFAULT;
-                }
         }
 
         /**
-         * 默认词缀配置
+         * 预设词缀配置
          */
-        public static class DefaultAffixes {
+        public static class PresetAffixes {
                 // ===== 武器词缀 =====
                 @ConfigEntry.Gui.CollapsibleObject
                 public AffixEntry fire_weapon = new AffixEntry(

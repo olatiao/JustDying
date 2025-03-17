@@ -18,33 +18,57 @@ import java.util.Random;
 import java.util.Map;
 import java.util.UUID;
 import java.util.HashMap;
+import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import net.minecraft.nbt.NbtCompound;
 
 /**
  * 词缀管理器，用于管理词缀的应用和处理
+ * 提供添加、删除和管理物品词缀的方法以及处理词缀效果
  */
 public class AffixManager {
-    private static final Random RANDOM = new Random();
+    // 使用ThreadLocalRandom替代单一Random实例以提高多线程性能
+    
+    // 物品类型常量
+    private static final String ITEM_TYPE_WEAPON = Affix.ITEM_TYPE_WEAPON;
+    private static final String ITEM_TYPE_ARMOR = Affix.ITEM_TYPE_ARMOR;
+    private static final String ITEM_TYPE_TOOL = Affix.ITEM_TYPE_TOOL;
+    private static final String ITEM_TYPE_ANY = Affix.ITEM_TYPE_ANY;
+    
+    // 日志消息常量
+    private static final String LOG_AFFIX_APPLIED = "词缀已应用到物品: {}";
+    private static final String LOG_AFFIX_REMOVED = "词缀已从物品移除: {}";
+    private static final String LOG_INVALID_ITEM = "无效的物品，不适合添加词缀";
     
     /**
      * 初始化词缀系统
      */
     public static void init() {
-        // 从配置中加载词缀
-        AffixRegistry.loadFromConfig();
+        try {
+            // 从配置中加载词缀
+            AffixRegistry.loadFromConfig();
+            JustDying.LOGGER.info("词缀系统初始化完成，已加载 {} 个词缀", AffixRegistry.getAllAffixes().size());
+        } catch (Exception e) {
+            JustDying.LOGGER.error("词缀系统初始化失败: {}", e.getMessage());
+        }
     }
     
     /**
      * 为物品添加随机词缀
+     * 
+     * @param stack 物品堆
+     * @param count 要添加的词缀数量
+     * @return 添加词缀后的物品堆
      */
     public static ItemStack addRandomAffixes(ItemStack stack, int count) {
-        if (stack.isEmpty() || count <= 0) {
+        if (stack == null || stack.isEmpty() || count <= 0) {
             return stack;
         }
         
         // 获取物品类型
         String itemType = getItemType(stack);
         if (itemType == null) {
+            JustDying.LOGGER.debug(LOG_INVALID_ITEM);
             return stack; // 不适合添加词缀的物品
         }
         
@@ -57,12 +81,19 @@ public class AffixManager {
         }
         
         int affixesToAdd = Math.min(count, availableSlots);
+        int added = 0;
         
         for (int i = 0; i < affixesToAdd; i++) {
             Affix affix = getRandomAffixForType(itemType);
             if (affix != null) {
                 affix.applyToItem(stack);
+                added++;
+                JustDying.LOGGER.debug(LOG_AFFIX_APPLIED, affix.getId());
             }
+        }
+        
+        if (added > 0) {
+            JustDying.LOGGER.debug("已添加 {} 个随机词缀到物品", added);
         }
         
         return stack;
@@ -75,7 +106,7 @@ public class AffixManager {
      * @return 物品类型，如果不适合添加词缀则返回null
      */
     private static String getItemType(ItemStack stack) {
-        if (stack.isEmpty()) {
+        if (stack == null || stack.isEmpty()) {
             return null;
         }
         
@@ -85,24 +116,24 @@ public class AffixManager {
             stack.getItem() == net.minecraft.item.Items.BOW ||
             stack.getItem() == net.minecraft.item.Items.CROSSBOW ||
             stack.getItem() == net.minecraft.item.Items.TRIDENT) {
-            return "WEAPON";
+            return ITEM_TYPE_WEAPON;
         }
         
         // 检查是否为防具
         if (stack.getItem() instanceof net.minecraft.item.ArmorItem) {
-            return "ARMOR";
+            return ITEM_TYPE_ARMOR;
         }
         
         // 检查是否为工具
         if (stack.getItem() instanceof net.minecraft.item.PickaxeItem ||
             stack.getItem() instanceof net.minecraft.item.ShovelItem ||
             stack.getItem() instanceof net.minecraft.item.HoeItem) {
-            return "TOOL";
+            return ITEM_TYPE_TOOL;
         }
         
         // 特殊物品
         if (stack.getItem() == net.minecraft.item.Items.SHIELD) {
-            return "ARMOR"; // 盾牌视为防具
+            return ITEM_TYPE_ARMOR; // 盾牌视为防具
         }
         
         return null; // 不适合添加词缀
@@ -115,32 +146,43 @@ public class AffixManager {
      * @return 随机词缀，如果没有适合的词缀则返回null
      */
     private static Affix getRandomAffixForType(String itemType) {
+        if (itemType == null) {
+            return null;
+        }
+        
         List<Affix> suitableAffixes = new ArrayList<>();
         
         for (Affix affix : AffixRegistry.getAllAffixes()) {
-            if (affix.isApplicableTo(itemType) || affix.isApplicableTo("ANY")) {
+            if (affix != null && (affix.isApplicableTo(itemType) || affix.isApplicableTo(ITEM_TYPE_ANY))) {
                 suitableAffixes.add(affix);
             }
         }
         
         if (suitableAffixes.isEmpty()) {
+            JustDying.LOGGER.debug("没有找到适合物品类型 {} 的词缀", itemType);
             return null;
         }
         
-        return suitableAffixes.get(RANDOM.nextInt(suitableAffixes.size()));
+        // 使用ThreadLocalRandom替代静态Random
+        return suitableAffixes.get(ThreadLocalRandom.current().nextInt(suitableAffixes.size()));
     }
     
     /**
      * 为物品添加指定词缀
+     * 
+     * @param stack 物品堆
+     * @param affixId 词缀ID
+     * @return 添加词缀后的物品堆
      */
     public static ItemStack addAffix(ItemStack stack, Identifier affixId) {
-        if (stack.isEmpty()) {
+        if (stack == null || stack.isEmpty() || affixId == null) {
             return stack;
         }
         
         // 获取物品类型
         String itemType = getItemType(stack);
         if (itemType == null) {
+            JustDying.LOGGER.debug(LOG_INVALID_ITEM);
             return stack; // 不适合添加词缀的物品
         }
         
@@ -242,7 +284,7 @@ public class AffixManager {
                     
                     if (effect.getTrigger() == AffixEffectTrigger.ON_HIT) {
                         // 根据几率触发效果
-                        if (RANDOM.nextFloat() < effect.getChance()) {
+                        if (ThreadLocalRandom.current().nextFloat() < effect.getChance()) {
                             StatusEffectInstance statusEffect = effect.createEffectInstance();
                             if (statusEffect != null) {
                                 target.addStatusEffect(statusEffect);
@@ -279,7 +321,7 @@ public class AffixManager {
                     
                     if (effect.getTrigger() == AffixEffectTrigger.ON_HURT) {
                         // 根据几率触发效果
-                        if (RANDOM.nextFloat() < effect.getChance()) {
+                        if (ThreadLocalRandom.current().nextFloat() < effect.getChance()) {
                             StatusEffectInstance statusEffect = effect.createEffectInstance();
                             if (statusEffect != null) {
                                 entity.addStatusEffect(statusEffect);
@@ -332,7 +374,7 @@ public class AffixManager {
      */
     public static boolean shouldDropWithAffix() {
         float chance = JustDying.getConfig().affixes.affixDropChance;
-        return RANDOM.nextFloat() < (chance / 100.0f);
+        return ThreadLocalRandom.current().nextFloat() < (chance / 100.0f);
     }
     
     /**

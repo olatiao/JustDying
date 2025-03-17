@@ -9,6 +9,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.command.CommandManager;
@@ -20,336 +21,612 @@ import net.minecraft.util.Identifier;
 
 import java.util.Collection;
 import java.util.Optional;
+import java.util.Objects;
 
 /**
- * 属性命令类
- * 提供获取和设置玩家属性的命令
+ * 属性命令处理类
+ * 注册并处理与属性相关的命令，提供属性查询、修改和管理功能
  */
 public class AttributeCommands {
-
+    // 命令常量定义
+    private static final String CMD_ROOT = "attribute";
+    private static final String CMD_GET = "get";
+    private static final String CMD_SET = "set";
+    private static final String CMD_POINTS = "points";
+    private static final String CMD_ADD_POINTS = "addpoints";
+    private static final String CMD_MAX = "max";
+    private static final String CMD_LIST = "list";
+    private static final String CMD_HELP = "help";
+    
+    // 参数常量定义
+    private static final String ARG_ATTRIBUTE = "attribute";
+    private static final String ARG_VALUE = "value";
+    private static final String ARG_PLAYER = "player";
+    private static final String ARG_POINTS = "points";
+    
+    // 消息常量定义
+    private static final String MSG_CURRENT_VALUE = "当前属性 %s: %d";
+    private static final String MSG_AVAILABLE_POINTS = "当前可用点数: %d";
+    private static final String MSG_ATTRIBUTE_SET = "已设置 %s 的 %s 属性为 %d";
+    private static final String MSG_POINTS_SET = "已设置 %s 的可用点数为 %d";
+    private static final String MSG_POINTS_ADDED = "已为 %s 添加 %d 点数";
+    private static final String MSG_MAX_VALUE_SET = "已设置 %s 的最大值为 %d";
+    private static final String MSG_ATTRIBUTE_NOT_FOUND = "找不到属性: %s";
+    private static final String MSG_ERROR_GETTING_ATTRIBUTE = "获取属性 %s 时出错";
+    private static final String MSG_PLAYER_NOT_FOUND = "找不到玩家: %s";
+    private static final String MSG_INVALID_VALUE = "无效的值: %d";
+    private static final String MSG_COMMAND_ERROR = "执行命令时出错: %s";
+    private static final String MSG_OPERATION_FAILED = "操作失败，请检查日志获取详细信息";
+    private static final String MSG_LIST_HEADER = "可用属性:";
+    private static final String MSG_LIST_ITEM = " - %s (%s): %d/%d";
+    private static final String MSG_HELP_HEADER = "属性命令帮助:";
+    private static final String MSG_HELP_GET = " - /attribute get <属性>: 查看属性值";
+    private static final String MSG_HELP_SET = " - /attribute set <属性> <值> [玩家]: 设置属性值";
+    private static final String MSG_HELP_POINTS = " - /attribute points: 查看可用点数";
+    private static final String MSG_HELP_ADD_POINTS = " - /attribute addpoints <点数> [玩家]: 添加可用点数";
+    private static final String MSG_HELP_MAX = " - /attribute max <属性> <值>: 设置属性最大值";
+    private static final String MSG_HELP_LIST = " - /attribute list: 列出所有属性";
+    
+    // 权限等级
+    private static final int PERMISSION_LEVEL_ADMIN = 2;
+    
     /**
-     * 注册所有属性命令
-     * 
-     * @param dispatcher 命令调度器
-     * @param registryAccess 注册表访问
-     * @param environment 环境
+     * 注册所有属性相关命令
      */
-    public static void register(CommandDispatcher<ServerCommandSource> dispatcher, CommandRegistryAccess registryAccess, CommandManager.RegistrationEnvironment environment) {
-        // 获取玩家属性命令
-        dispatcher.register(CommandManager.literal("attribute")
-            .requires(source -> source.hasPermissionLevel(0)) // 所有玩家都可以使用
-            .then(CommandManager.literal("get")
-                .executes(context -> getOwnAttributes(context))
-                .then(CommandManager.argument("attribute", StringArgumentType.word())
-                    .suggests((context, builder) -> {
-                        AttributeManager.getAllAttributes().forEach(attr -> 
-                            builder.suggest(attr.getId().getPath()));
-                        return builder.buildFuture();
-                    })
-                    .executes(context -> getOwnAttribute(context, StringArgumentType.getString(context, "attribute")))
-                )
-            )
-            // 管理员命令 - 获取其他玩家属性
-            .then(CommandManager.literal("getplayer")
-                .requires(source -> source.hasPermissionLevel(2)) // 需要管理员权限
-                .then(CommandManager.argument("player", EntityArgumentType.players())
-                    .executes(context -> getPlayerAttributes(context, EntityArgumentType.getPlayers(context, "player")))
-                    .then(CommandManager.argument("attribute", StringArgumentType.word())
+    public static void register() {
+        CommandRegistrationCallback.EVENT.register(AttributeCommands::registerCommands);
+        JustDying.LOGGER.info("已注册属性命令");
+    }
+    
+    /**
+     * 注册命令到命令分发器
+     */
+    private static void registerCommands(
+            CommandDispatcher<ServerCommandSource> dispatcher, 
+            CommandRegistryAccess registryAccess, 
+            CommandManager.RegistrationEnvironment environment) {
+        
+        try {
+            // 注册获取属性命令 (权限等级 0)
+            registerGetCommand(dispatcher);
+            
+            // 注册设置属性命令 (权限等级 2)
+            registerSetCommand(dispatcher);
+            
+            // 注册获取可用点数命令 (权限等级 0)
+            registerPointsCommand(dispatcher);
+            
+            // 注册添加点数命令 (权限等级 2)
+            registerAddPointsCommand(dispatcher);
+            
+            // 注册设置最大值命令 (权限等级 2)
+            registerMaxCommand(dispatcher);
+            
+            // 注册列出属性命令 (权限等级 0)
+            registerListCommand(dispatcher);
+            
+            // 注册帮助命令 (权限等级 0)
+            registerHelpCommand(dispatcher);
+            
+            JustDying.LOGGER.debug("已成功注册所有属性命令");
+        } catch (Exception e) {
+            JustDying.LOGGER.error("注册属性命令时出错: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * 注册获取属性命令
+     */
+    private static void registerGetCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .then(CommandManager.literal(CMD_GET)
+                    .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
                         .suggests((context, builder) -> {
                             AttributeManager.getAllAttributes().forEach(attr -> 
                                 builder.suggest(attr.getId().getPath()));
                             return builder.buildFuture();
                         })
-                        .executes(context -> getPlayerAttribute(
-                            context, 
-                            EntityArgumentType.getPlayers(context, "player"),
-                            StringArgumentType.getString(context, "attribute")
-                        ))
+                        .executes(context -> getAttributeCommand(context, getPlayerFromContext(context)))
                     )
                 )
-            )
-            // 管理员命令 - 设置玩家属性
-            .then(CommandManager.literal("set")
-                .requires(source -> source.hasPermissionLevel(2)) // 需要管理员权限
-                .then(CommandManager.argument("player", EntityArgumentType.players())
-                    .then(CommandManager.argument("attribute", StringArgumentType.word())
+        );
+    }
+    
+    /**
+     * 注册设置属性命令
+     */
+    private static void registerSetCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
+                .then(CommandManager.literal(CMD_SET)
+                    .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
                         .suggests((context, builder) -> {
                             AttributeManager.getAllAttributes().forEach(attr -> 
                                 builder.suggest(attr.getId().getPath()));
                             return builder.buildFuture();
                         })
-                        .then(CommandManager.argument("value", IntegerArgumentType.integer(0))
-                            .executes(context -> setPlayerAttribute(
-                                context, 
-                                EntityArgumentType.getPlayers(context, "player"),
-                                StringArgumentType.getString(context, "attribute"),
-                                IntegerArgumentType.getInteger(context, "value")
-                            ))
+                        .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(0))
+                            .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
+                                .executes(context -> {
+                                    try {
+                                        ServerPlayerEntity player = getPlayerByName(
+                                                context, 
+                                                StringArgumentType.getString(context, ARG_PLAYER));
+                                        if (player == null) {
+                                            sendErrorMessage(context, MSG_PLAYER_NOT_FOUND, 
+                                                    StringArgumentType.getString(context, ARG_PLAYER));
+                                            return 0;
+                                        }
+                                        return setAttributeCommand(
+                                                context, 
+                                                player, 
+                                                StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                                IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                    } catch (Exception e) {
+                                        handleCommandException(context, e);
+                                        return 0;
+                                    }
+                                })
+                            )
+                            .executes(context -> {
+                                try {
+                                    return setAttributeCommand(
+                                            context,
+                                            getPlayerFromContext(context),
+                                            StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                            IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                } catch (Exception e) {
+                                    handleCommandException(context, e);
+                                    return 0;
+                                }
+                            })
                         )
                     )
                 )
-            )
-            // 管理员命令 - 设置玩家可用属性点
-            .then(CommandManager.literal("points")
-                .requires(source -> source.hasPermissionLevel(2)) // 需要管理员权限
-                .then(CommandManager.argument("player", EntityArgumentType.players())
-                    .then(CommandManager.argument("points", IntegerArgumentType.integer(0))
-                        .executes(context -> setPlayerPoints(
-                            context, 
-                            EntityArgumentType.getPlayers(context, "player"),
-                            IntegerArgumentType.getInteger(context, "points")
-                        ))
-                    )
-                )
-            )
-            // 管理员命令 - 添加玩家可用属性点
-            .then(CommandManager.literal("addpoints")
-                .requires(source -> source.hasPermissionLevel(2)) // 需要管理员权限
-                .then(CommandManager.argument("player", EntityArgumentType.players())
-                    .then(CommandManager.argument("points", IntegerArgumentType.integer(1))
-                        .executes(context -> addPlayerPoints(
-                            context, 
-                            EntityArgumentType.getPlayers(context, "player"),
-                            IntegerArgumentType.getInteger(context, "points")
-                        ))
-                    )
-                )
-            )
-            // 管理员命令 - 设置属性上限
-            .then(CommandManager.literal("maxvalue")
-                .requires(source -> source.hasPermissionLevel(2)) // 需要管理员权限
-                .then(CommandManager.argument("attribute", StringArgumentType.word())
-                    .suggests((context, builder) -> {
-                        AttributeManager.getAllAttributes().forEach(attr -> 
-                            builder.suggest(attr.getId().getPath()));
-                        return builder.buildFuture();
-                    })
-                    .then(CommandManager.argument("maxvalue", IntegerArgumentType.integer(1, 10000))
-                        .executes(context -> setAttributeMaxValue(
-                            context,
-                            StringArgumentType.getString(context, "attribute"),
-                            IntegerArgumentType.getInteger(context, "maxvalue")
-                        ))
-                    )
-                )
-            )
         );
     }
-
+    
     /**
-     * 获取自己的所有属性
+     * 注册获取可用点数命令
      */
-    private static int getOwnAttributes(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
-        ServerPlayerEntity player = context.getSource().getPlayer();
-        return getPlayerAttributes(context, java.util.Collections.singleton(player));
+    private static void registerPointsCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .then(CommandManager.literal(CMD_POINTS)
+                    .executes(context -> getPointsCommand(context, getPlayerFromContext(context)))
+                    .then(CommandManager.argument(ARG_POINTS, IntegerArgumentType.integer(0))
+                        .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
+                        .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
+                            .executes(context -> {
+                                try {
+                                    ServerPlayerEntity player = getPlayerByName(
+                                            context, 
+                                            StringArgumentType.getString(context, ARG_PLAYER));
+                                    if (player == null) {
+                                        sendErrorMessage(context, MSG_PLAYER_NOT_FOUND, 
+                                                StringArgumentType.getString(context, ARG_PLAYER));
+                                        return 0;
+                                    }
+                                    return setPointsCommand(
+                                            context, 
+                                            player,
+                                            IntegerArgumentType.getInteger(context, ARG_POINTS));
+                                } catch (Exception e) {
+                                    handleCommandException(context, e);
+                                    return 0;
+                                }
+                            })
+                        )
+                        .executes(context -> {
+                            try {
+                                return setPointsCommand(
+                                        context,
+                                        getPlayerFromContext(context),
+                                        IntegerArgumentType.getInteger(context, ARG_POINTS));
+                            } catch (Exception e) {
+                                handleCommandException(context, e);
+                                return 0;
+                            }
+                        })
+                    )
+                )
+        );
     }
-
+    
     /**
-     * 获取自己的指定属性
+     * 注册列出属性命令
      */
-    private static int getOwnAttribute(CommandContext<ServerCommandSource> context, String attributeName) throws CommandSyntaxException {
-        ServerPlayerEntity player = context.getSource().getPlayer();
-        return getPlayerAttribute(context, java.util.Collections.singleton(player), attributeName);
+    private static void registerListCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .then(CommandManager.literal(CMD_LIST)
+                    .executes(context -> {
+                        try {
+                            return listAttributesCommand(context, getPlayerFromContext(context));
+                        } catch (Exception e) {
+                            handleCommandException(context, e);
+                            return 0;
+                        }
+                    })
+                )
+        );
     }
-
+    
     /**
-     * 获取玩家的所有属性
+     * 注册帮助命令
      */
-    private static int getPlayerAttributes(CommandContext<ServerCommandSource> context, Collection<ServerPlayerEntity> players) {
-        int count = 0;
-        for (ServerPlayerEntity player : players) {
-            context.getSource().sendFeedback(() -> Text.literal("===== ").append(player.getDisplayName()).append(" =====").formatted(Formatting.GOLD), false);
-            
-            // 显示可用点数
-            int points = AttributeHelper.getAvailablePoints(player);
-            context.getSource().sendFeedback(() -> Text.translatable("gui." + JustDying.MOD_ID + ".available_points", points).formatted(Formatting.GREEN), false);
-            
-            // 显示所有属性
-            for (JustDyingAttribute attribute : AttributeManager.getAllAttributes()) {
-                int value = AttributeHelper.getAttributeValue(player, attribute.getId());
-                
-                // 使用final变量捕获
-                final int attrValue = value;
-                final JustDyingAttribute attr = attribute;
-                
-                context.getSource().sendFeedback(() -> {
-                    String effectText = "";
-                    if (attr.getVanillaAttribute() != null) {
-                        double bonus = attr.calculateAttributeBonus(attrValue);
-                        effectText = String.format(" (+%.1f %s)", bonus, attr.getVanillaAttribute().getTranslationKey());
+    private static void registerHelpCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .then(CommandManager.literal(CMD_HELP)
+                    .executes(context -> {
+                        try {
+                            return showHelpCommand(context);
+                        } catch (Exception e) {
+                            handleCommandException(context, e);
+                            return 0;
+                        }
+                    })
+                )
+                .executes(context -> {
+                    try {
+                        return showHelpCommand(context);
+                    } catch (Exception e) {
+                        handleCommandException(context, e);
+                        return 0;
                     }
-                    
-                    return Text.literal("- ").append(attr.getName())
-                        .append(": " + attrValue + "/" + attr.getMaxValue())
-                        .append(Text.literal(effectText).formatted(Formatting.AQUA))
-                        .formatted(Formatting.YELLOW);
-                }, false);
-            }
-            count++;
-        }
-        return count;
+                })
+        );
     }
-
+    
     /**
-     * 获取玩家的指定属性
+     * 注册添加点数命令
      */
-    private static int getPlayerAttribute(CommandContext<ServerCommandSource> context, Collection<ServerPlayerEntity> players, String attributeName) {
-        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
-        Optional<JustDyingAttribute> attributeOpt = AttributeManager.getAttribute(attributeId);
-        
-        if (attributeOpt.isEmpty()) {
-            context.getSource().sendError(Text.literal("属性不存在: " + attributeName));
-            return 0;
-        }
-        
-        JustDyingAttribute attribute = attributeOpt.get();
-        int count = 0;
-        
-        for (ServerPlayerEntity player : players) {
+    private static void registerAddPointsCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
+                .then(CommandManager.literal(CMD_ADD_POINTS)
+                    .then(CommandManager.argument(ARG_POINTS, IntegerArgumentType.integer(1))
+                        .then(CommandManager.argument(ARG_PLAYER, StringArgumentType.word())
+                            .executes(context -> {
+                                try {
+                                    ServerPlayerEntity player = getPlayerByName(
+                                            context, 
+                                            StringArgumentType.getString(context, ARG_PLAYER));
+                                    if (player == null) {
+                                        sendErrorMessage(context, MSG_PLAYER_NOT_FOUND, 
+                                                StringArgumentType.getString(context, ARG_PLAYER));
+                                        return 0;
+                                    }
+                                    return addPointsCommand(
+                                            context, 
+                                            player,
+                                            IntegerArgumentType.getInteger(context, ARG_POINTS));
+                                } catch (Exception e) {
+                                    handleCommandException(context, e);
+                                    return 0;
+                                }
+                            })
+                        )
+                        .executes(context -> {
+                            try {
+                                return addPointsCommand(
+                                        context,
+                                        getPlayerFromContext(context),
+                                        IntegerArgumentType.getInteger(context, ARG_POINTS));
+                            } catch (Exception e) {
+                                handleCommandException(context, e);
+                                return 0;
+                            }
+                        })
+                    )
+                )
+        );
+    }
+    
+    /**
+     * 注册设置最大值命令
+     */
+    private static void registerMaxCommand(CommandDispatcher<ServerCommandSource> dispatcher) {
+        dispatcher.register(
+            CommandManager.literal(CMD_ROOT)
+                .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
+                .then(CommandManager.literal(CMD_MAX)
+                    .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
+                        .suggests((context, builder) -> {
+                            AttributeManager.getAllAttributes().forEach(attr -> 
+                                builder.suggest(attr.getId().getPath()));
+                            return builder.buildFuture();
+                        })
+                        .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(1))
+                            .executes(context -> {
+                                try {
+                                    return setMaxValueCommand(
+                                            context,
+                                            StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                            IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                } catch (Exception e) {
+                                    handleCommandException(context, e);
+                                    return 0;
+                                }
+                            })
+                        )
+                    )
+                )
+        );
+    }
+    
+    /**
+     * 处理获取属性命令
+     */
+    private static int getAttributeCommand(CommandContext<ServerCommandSource> context, ServerPlayerEntity player) {
+        try {
+            String attributeName = StringArgumentType.getString(context, ARG_ATTRIBUTE);
+            
+            Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
+            
+            // 验证属性存在
+            if (!validateAttribute(context, attributeId)) {
+                return 0;
+            }
+            
             int value = AttributeHelper.getAttributeValue(player, attributeId);
             
-            // 使用final变量捕获
-            final int playerValue = value;
-            
-            context.getSource().sendFeedback(() -> {
-                String effectText = "";
-                if (attribute.getVanillaAttribute() != null) {
-                    double bonus = attribute.calculateAttributeBonus(playerValue);
-                    effectText = String.format(" (+%.1f %s)", bonus, attribute.getVanillaAttribute().getTranslationKey());
-                }
-                
-                return Text.literal(player.getDisplayName().getString() + " - ")
-                    .append(attribute.getName())
-                    .append(": " + playerValue + "/" + attribute.getMaxValue())
-                    .append(Text.literal(effectText).formatted(Formatting.AQUA))
-                    .formatted(Formatting.YELLOW);
-            }, false);
-            
-            count++;
-        }
-        
-        return count;
-    }
-
-    /**
-     * 设置玩家的指定属性
-     */
-    private static int setPlayerAttribute(CommandContext<ServerCommandSource> context, Collection<ServerPlayerEntity> players, String attributeName, int value) {
-        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
-        Optional<JustDyingAttribute> attributeOpt = AttributeManager.getAttribute(attributeId);
-        
-        if (attributeOpt.isEmpty()) {
-            context.getSource().sendError(Text.literal("属性不存在: " + attributeName));
-            return 0;
-        }
-        
-        JustDyingAttribute attribute = attributeOpt.get();
-        int count = 0;
-        
-        // 确保值在有效范围内
-        int validValue = Math.max(attribute.getMinValue(), Math.min(value, attribute.getMaxValue()));
-        
-        for (ServerPlayerEntity player : players) {
-            AttributeHelper.setAttributeValue(player, attributeId, validValue);
-            
-            context.getSource().sendFeedback(() -> 
-                Text.literal("已将 ")
-                    .append(player.getDisplayName())
-                    .append(" 的 ")
-                    .append(attribute.getName())
-                    .append(" 设置为 " + validValue)
-                    .formatted(Formatting.GREEN), 
-                true);
-            count++;
-        }
-        
-        return count;
-    }
-
-    /**
-     * 设置玩家的可用属性点
-     */
-    private static int setPlayerPoints(CommandContext<ServerCommandSource> context, Collection<ServerPlayerEntity> players, int points) {
-        int count = 0;
-        
-        for (ServerPlayerEntity player : players) {
-            AttributeHelper.setAvailablePoints(player, points);
-            
-            context.getSource().sendFeedback(() -> 
-                Text.literal("已将 ")
-                    .append(player.getDisplayName())
-                    .append(" 的可用属性点设置为 " + points)
-                    .formatted(Formatting.GREEN), 
-                true);
-            count++;
-        }
-        
-        return count;
-    }
-
-    /**
-     * 添加玩家的可用属性点
-     */
-    private static int addPlayerPoints(CommandContext<ServerCommandSource> context, Collection<ServerPlayerEntity> players, int points) {
-        int count = 0;
-        
-        for (ServerPlayerEntity player : players) {
-            AttributeHelper.addPoints(player, points);
-            int newPoints = AttributeHelper.getAvailablePoints(player);
-            
-            context.getSource().sendFeedback(() -> 
-                Text.literal("已为 ")
-                    .append(player.getDisplayName())
-                    .append(" 添加 " + points + " 点属性点，当前可用点数: " + newPoints)
-                    .formatted(Formatting.GREEN), 
-                true);
-            count++;
-        }
-        
-        return count;
-    }
-
-    /**
-     * 设置属性的最大值
-     * 
-     * @param context 命令上下文
-     * @param attributePath 属性路径
-     * @param maxValue 新的最大值
-     * @return 命令结果
-     */
-    private static int setAttributeMaxValue(CommandContext<ServerCommandSource> context, String attributePath, int maxValue) {
-        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributePath);
-        
-        boolean success = AttributeManager.updateAttributeMaxValue(attributeId, maxValue);
-        
-        if (success) {
-            // 通知所有玩家属性上限已更新 - 移除通知，只调整超过上限的属性值
-            context.getSource().getServer().getPlayerManager().getPlayerList().forEach(player -> {
-                // 获取当前属性值
-                int currentValue = AttributeHelper.getAttributeValue(player, attributeId);
-                
-                // 如果当前值超过新的上限，则调整为新上限
-                if (currentValue > maxValue) {
-                    AttributeHelper.setAttributeValue(player, attributeId, maxValue);
-                }
-            });
-            
-            // 只向命令执行者发送反馈，不广播给所有玩家
-            context.getSource().sendFeedback(
-                () -> Text.translatable("command.justdying.attribute.maxvalue.success", 
-                        attributePath, maxValue)
-                        .formatted(Formatting.GREEN),
-                false // 改为false，不广播
-            );
+            // 发送结果消息
+            sendSuccessMessage(context, MSG_CURRENT_VALUE, attributeName, value);
             
             return 1;
-        } else {
-            context.getSource().sendError(
-                Text.translatable("command.justdying.attribute.maxvalue.failed", 
-                        attributePath)
-            );
-            
+        } catch (Exception e) {
+            handleCommandException(context, e);
             return 0;
         }
+    }
+    
+    /**
+     * 处理设置属性命令
+     */
+    private static int setAttributeCommand(
+            CommandContext<ServerCommandSource> context, 
+            ServerPlayerEntity player, 
+            String attributeName, 
+            int value) {
+        
+        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
+        
+        // 验证属性存在
+        if (!validateAttribute(context, attributeId)) {
+            return 0;
+        }
+        
+        // 验证值有效
+        int minValue = AttributeHelper.getAttributeMinValue(attributeId);
+        int maxValue = AttributeHelper.getAttributeMaxValue(attributeId);
+        
+        if (value < minValue || value > maxValue) {
+            sendErrorMessage(context, "值必须在 %d 和 %d 之间", minValue, maxValue);
+            return 0;
+        }
+        
+        // 设置属性值
+        boolean success = AttributeHelper.setAttributeValue(player, attributeId, value);
+        
+        if (success) {
+            // 发送成功消息
+            sendSuccessMessage(context, MSG_ATTRIBUTE_SET, 
+                    player.getName().getString(), attributeName, value);
+            return 1;
+        } else {
+            sendErrorMessage(context, MSG_OPERATION_FAILED);
+            return 0;
+        }
+    }
+    
+    /**
+     * 处理获取点数命令
+     */
+    private static int getPointsCommand(CommandContext<ServerCommandSource> context, ServerPlayerEntity player) {
+        try {
+            int points = AttributeHelper.getAvailablePoints(player);
+            
+            // 发送结果消息
+            sendSuccessMessage(context, MSG_AVAILABLE_POINTS, points);
+            
+            return 1;
+        } catch (Exception e) {
+            handleCommandException(context, e);
+            return 0;
+        }
+    }
+    
+    /**
+     * 处理设置点数命令
+     */
+    private static int setPointsCommand(
+            CommandContext<ServerCommandSource> context, 
+            ServerPlayerEntity player, 
+            int points) {
+        
+        if (points < 0) {
+            sendErrorMessage(context, MSG_INVALID_VALUE, points);
+            return 0;
+        }
+        
+        boolean success = AttributeHelper.setAvailablePoints(player, points);
+        
+        if (success) {
+            // 发送成功消息
+            sendSuccessMessage(context, MSG_POINTS_SET, player.getName().getString(), points);
+            return 1;
+        } else {
+            sendErrorMessage(context, MSG_OPERATION_FAILED);
+            return 0;
+        }
+    }
+    
+    /**
+     * 处理添加点数命令
+     */
+    private static int addPointsCommand(
+            CommandContext<ServerCommandSource> context, 
+            ServerPlayerEntity player, 
+            int points) {
+        
+        if (points <= 0) {
+            sendErrorMessage(context, MSG_INVALID_VALUE, points);
+            return 0;
+        }
+        
+        boolean success = AttributeHelper.addPoints(player, points);
+        
+        if (success) {
+            // 发送成功消息
+            sendSuccessMessage(context, MSG_POINTS_ADDED, player.getName().getString(), points);
+            return 1;
+        } else {
+            sendErrorMessage(context, MSG_OPERATION_FAILED);
+            return 0;
+        }
+    }
+    
+    /**
+     * 处理设置最大值命令
+     * 注意：此方法目前尚不支持持久化到配置文件
+     */
+    private static int setMaxValueCommand(
+            CommandContext<ServerCommandSource> context, 
+            String attributeName, 
+            int maxValue) {
+        
+        if (maxValue <= 0) {
+            sendErrorMessage(context, MSG_INVALID_VALUE, maxValue);
+            return 0;
+        }
+        
+        sendErrorMessage(context, "设置最大值功能尚未实现");
+        return 0;
+    }
+    
+    /**
+     * 处理列出属性命令
+     */
+    private static int listAttributesCommand(
+            CommandContext<ServerCommandSource> context, 
+            ServerPlayerEntity player) {
+        
+        // 获取所有属性
+        Collection<JustDyingAttribute> attributes = AttributeManager.getAllAttributes();
+        
+        if (attributes.isEmpty()) {
+            sendErrorMessage(context, "没有可用的属性");
+            return 0;
+        }
+        
+        // 发送属性列表
+        sendInfoMessage(context, MSG_LIST_HEADER);
+        
+        for (JustDyingAttribute attribute : attributes) {
+            Identifier id = attribute.getId();
+            int value = AttributeHelper.getAttributeValue(player, id);
+            int maxValue = attribute.getMaxValue();
+            
+            sendInfoMessage(context, MSG_LIST_ITEM, 
+                    attribute.getName(), id.getPath(), value, maxValue);
+        }
+        
+        return attributes.size();
+    }
+    
+    /**
+     * 处理帮助命令
+     */
+    private static int showHelpCommand(CommandContext<ServerCommandSource> context) {
+        sendInfoMessage(context, MSG_HELP_HEADER);
+        sendInfoMessage(context, MSG_HELP_GET);
+        sendInfoMessage(context, MSG_HELP_SET);
+        sendInfoMessage(context, MSG_HELP_POINTS);
+        sendInfoMessage(context, MSG_HELP_ADD_POINTS);
+        sendInfoMessage(context, MSG_HELP_MAX);
+        sendInfoMessage(context, MSG_HELP_LIST);
+        
+        return 1;
+    }
+    
+    /**
+     * 从命令上下文获取玩家
+     */
+    private static ServerPlayerEntity getPlayerFromContext(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
+        return context.getSource().getPlayerOrThrow();
+    }
+    
+    /**
+     * 根据名称获取玩家
+     */
+    private static ServerPlayerEntity getPlayerByName(CommandContext<ServerCommandSource> context, String name) {
+        try {
+            ServerPlayerEntity player = context.getSource().getServer().getPlayerManager().getPlayer(name);
+            
+            if (player == null) {
+                JustDying.LOGGER.warn("找不到玩家: {}", name);
+            }
+            
+            return player;
+        } catch (Exception e) {
+            JustDying.LOGGER.error("获取玩家时出错: {}", e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * 验证属性存在
+     */
+    private static boolean validateAttribute(CommandContext<ServerCommandSource> context, Identifier attributeId) {
+        try {
+            Optional<JustDyingAttribute> attribute = AttributeManager.getAttribute(attributeId);
+            
+            if (attribute.isEmpty()) {
+                sendErrorMessage(context, MSG_ATTRIBUTE_NOT_FOUND, attributeId.toString());
+                return false;
+            }
+            
+            return true;
+        } catch (Exception e) {
+            sendErrorMessage(context, MSG_ERROR_GETTING_ATTRIBUTE, attributeId.toString());
+            JustDying.LOGGER.error("验证属性时出错: {}", e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 发送成功消息
+     */
+    private static void sendSuccessMessage(CommandContext<ServerCommandSource> context, String format, Object... args) {
+        context.getSource().sendFeedback(() -> 
+                Text.translatable(format, args).formatted(Formatting.GREEN), false);
+    }
+    
+    /**
+     * 发送错误消息
+     */
+    private static void sendErrorMessage(CommandContext<ServerCommandSource> context, String format, Object... args) {
+        context.getSource().sendError(Text.translatable(format, args).formatted(Formatting.RED));
+    }
+    
+    /**
+     * 发送信息消息
+     */
+    private static void sendInfoMessage(CommandContext<ServerCommandSource> context, String format, Object... args) {
+        context.getSource().sendFeedback(() -> 
+                Text.translatable(format, args).formatted(Formatting.AQUA), false);
+    }
+    
+    /**
+     * 处理命令异常
+     */
+    private static void handleCommandException(CommandContext<ServerCommandSource> context, Exception e) {
+        JustDying.LOGGER.error("执行命令时出错: {}", e.getMessage());
+        sendErrorMessage(context, MSG_COMMAND_ERROR, e.getMessage());
     }
 } 

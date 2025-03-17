@@ -15,8 +15,10 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.TypedActionResult;
 import net.minecraft.util.Formatting;
+import com.justdie.attribute.AttributeHelper;
+import com.justdie.attribute.PlayerAttributeData;
+import com.justdie.attribute.AttributeComponents;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,6 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * 处理属性上限增加物品的逻辑
  */
 public class AttributeCapItemHandler {
+    // 常量定义
+    private static final String SUCCESS_TRANSLATION_KEY = "message.justdying.attribute_cap_increased";
+    private static final String FAILURE_TRANSLATION_KEY = "message.justdying.attribute_cap_increase_failed";
     
     // 物品ID到属性ID的映射
     private static final Map<String, String> ITEM_TO_ATTRIBUTE_MAP = new ConcurrentHashMap<>(16);
@@ -47,6 +52,7 @@ public class AttributeCapItemHandler {
             return;
         }
         
+        int registeredCount = 0;
         // 遍历所有属性查找支持上限增加的属性
         for (Map.Entry<String, JustDyingConfig.AttributeConfig> entry : 
                 config.attributes.attributes.entrySet()) {
@@ -78,6 +84,7 @@ public class AttributeCapItemHandler {
                     
                     // 预缓存属性ID，减少后续查找次数
                     ATTRIBUTE_ID_CACHE.put(attributeKey, new Identifier(JustDying.MOD_ID, attributeKey));
+                    registeredCount++;
                     
                     if (config.debug) {
                         JustDying.LOGGER.debug("已注册属性上限增加物品: {} -> {}", capItemIdStr, attributeKey);
@@ -91,7 +98,7 @@ public class AttributeCapItemHandler {
             }
         }
         
-        JustDying.LOGGER.info("已注册 {} 个属性上限增加物品", ITEM_TO_ATTRIBUTE_MAP.size());
+        JustDying.LOGGER.info("已注册 {} 个属性上限增加物品", registeredCount);
     }
     
     /**
@@ -106,12 +113,13 @@ public class AttributeCapItemHandler {
      * 注册物品使用事件处理器
      */
     public static void register() {
-        if (!JustDying.getConfig().attributes.attributeCapItems.enableAttributeCapItems) {
+        JustDyingConfig config = JustDying.getConfig();
+        if (!config.attributes.attributeCapItems.enableAttributeCapItems) {
             JustDying.LOGGER.info("属性上限增加物品功能已禁用");
             return;
         }
         
-        // 初始化属性映射
+        // 重新初始化属性映射，确保使用最新配置
         initialize();
         
         // 如果没有找到有效的属性上限增加物品，则无需注册
@@ -120,9 +128,9 @@ public class AttributeCapItemHandler {
             return;
         }
         
-        // 注册物品使用事件处理器
+        // 注册物品使用事件处理器，使用更简洁的Lambda
         UseItemCallback.EVENT.register((player, world, hand) -> {
-            // 只处理服务器端和主手使用的物品
+            // 快速路径: 只处理服务器端和主手使用的物品
             if (world.isClient() || hand != Hand.MAIN_HAND) {
                 return TypedActionResult.pass(player.getStackInHand(hand));
             }
@@ -134,19 +142,13 @@ public class AttributeCapItemHandler {
             
             // 获取物品ID
             Item item = stack.getItem();
-            if (item == null) {
-                return TypedActionResult.pass(stack);
-            }
+            String itemIdStr = Registries.ITEM.getId(item).toString();
             
-            Identifier itemId = Registries.ITEM.getId(item);
-            String itemIdStr = itemId.toString();
-            
-            // 检查是否属于属性上限增加物品（使用高效的映射查找）
+            // 高效查找: 检查是否属于属性上限增加物品
             String attributePath = ITEM_TO_ATTRIBUTE_MAP.get(itemIdStr);
             if (attributePath != null) {
                 // 使用缓存获取属性ID，提高性能
-                Identifier attributeId = getAttributeId(attributePath);
-                return handleAttributeCapItem(player, stack, attributeId);
+                return handleAttributeCapItem(player, stack, getAttributeId(attributePath));
             }
             
             // 不是属性上限增加物品，继续正常使用逻辑
@@ -174,9 +176,7 @@ public class AttributeCapItemHandler {
         // 获取属性
         Optional<JustDyingAttribute> attributeOpt = AttributeManager.getAttribute(attributeId);
         if (attributeOpt.isEmpty()) {
-            if (JustDying.getConfig().debug) {
-                JustDying.LOGGER.error("找不到属性: {}", attributeId);
-            }
+            JustDying.LOGGER.error("找不到属性: {}", attributeId);
             return TypedActionResult.fail(stack);
         }
         
@@ -185,35 +185,45 @@ public class AttributeCapItemHandler {
         // 获取当前上限和增加量
         int currentMaxValue = attribute.getMaxValue();
         int increaseAmount = JustDying.getConfig().attributes.attributeCapItems.increaseAmountPerUse;
+        int newMaxValue = currentMaxValue + increaseAmount;
         
         // 增加上限
-        boolean success = AttributeManager.updateAttributeMaxValue(attributeId, currentMaxValue + increaseAmount);
+        boolean success = AttributeManager.updateAttributeMaxValue(attributeId, newMaxValue);
         
         if (success) {
             // 消耗物品
             stack.decrement(1);
             
+            // 如果玩家当前属性值超过了原来的最大值，需要重新应用属性
+            int currentValue = AttributeHelper.getAttributeValue(player, attributeId);
+            if (currentValue == currentMaxValue) {
+                // 对于已经达到上限的情况，确保属性效果更新
+                PlayerAttributeData attributeData = AttributeComponents.PLAYER_ATTRIBUTES.get(player).getAttributeData();
+                if (attributeData != null) {
+                    attributeData.updateVanillaAttribute(attribute, currentValue);
+                }
+            }
+            
             // 发送消息给玩家
             player.sendMessage(
-                Text.translatable("message.justdying.attribute_cap_increased", 
-                    attribute.getName().getString(), 
+                Text.translatable(SUCCESS_TRANSLATION_KEY, 
+                    attribute.getName(), 
                     increaseAmount, 
-                    currentMaxValue + increaseAmount)
+                    newMaxValue)
                 .formatted(Formatting.GREEN), 
                 true
             );
             
             if (JustDying.getConfig().debug) {
                 JustDying.LOGGER.debug("玩家 {} 使用物品增加了属性 {} 的上限，新上限: {}", 
-                    player.getName().getString(), attributeId, currentMaxValue + increaseAmount);
+                    player.getName().getString(), attributeId, newMaxValue);
             }
             
             return TypedActionResult.success(stack);
         } else {
             // 发送失败消息
             player.sendMessage(
-                Text.translatable("message.justdying.attribute_cap_increase_failed", 
-                    attribute.getName().getString())
+                Text.translatable(FAILURE_TRANSLATION_KEY, attribute.getName())
                 .formatted(Formatting.RED), 
                 true
             );

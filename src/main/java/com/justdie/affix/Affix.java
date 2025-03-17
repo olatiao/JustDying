@@ -25,9 +25,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Objects;
 
 /**
- * 表示物品词缀的基类
+ * 词缀系统的核心类，表示可应用于物品的单个词缀
+ * 包含词缀的属性、效果和相关操作
  */
 public class Affix {
     // NBT标签常量
@@ -35,6 +37,17 @@ public class Affix {
     public static final String AFFIX_ID_KEY = "id";
     public static final String AFFIX_TYPE_KEY = "type";
     public static final String AFFIX_ITEM_TYPE_KEY = "itemType";
+    public static final String AFFIX_UUID_KEY = "uuid";
+    public static final String AFFIX_NAME_KEY = "name";
+    public static final String AFFIX_FORMATTING_KEY = "formatting";
+    public static final String AFFIX_ATTRIBUTES_KEY = "attributes";
+    public static final String AFFIX_EFFECTS_KEY = "effects";
+    
+    // 物品类型常量
+    public static final String ITEM_TYPE_ANY = "ANY";
+    public static final String ITEM_TYPE_WEAPON = "WEAPON";
+    public static final String ITEM_TYPE_ARMOR = "ARMOR";
+    public static final String ITEM_TYPE_TOOL = "TOOL";
     
     private final Identifier id;
     private final String name;
@@ -42,7 +55,7 @@ public class Affix {
     private final List<AffixAttribute> attributes;
     private final List<AffixEffect> effects;
     private UUID uuid;
-    private String itemType = "ANY"; // 默认为任何类型
+    private String itemType = ITEM_TYPE_ANY;
     
     /**
      * 创建一个新的词缀
@@ -52,9 +65,9 @@ public class Affix {
      * @param formatting 词缀格式化（颜色）
      */
     public Affix(Identifier id, String name, Formatting formatting) {
-        this.id = id;
-        this.name = name;
-        this.formatting = formatting;
+        this.id = Objects.requireNonNull(id, "词缀ID不能为空");
+        this.name = Objects.requireNonNull(name, "词缀名称不能为空");
+        this.formatting = formatting != null ? formatting : Formatting.WHITE;
         this.attributes = new ArrayList<>();
         this.effects = new ArrayList<>();
         this.uuid = UUID.randomUUID();
@@ -64,46 +77,60 @@ public class Affix {
      * 从NBT数据创建词缀
      * 
      * @param nbt NBT数据
-     * @return 词缀实例
+     * @return 词缀实例，如果数据无效则返回null
      */
     public static Affix fromNbt(NbtCompound nbt) {
-        Identifier id = new Identifier(nbt.getString("id"));
-        String name = nbt.getString("name");
-        Formatting formatting = Formatting.byName(nbt.getString("formatting"));
-        
-        Affix affix = new Affix(id, name, formatting);
-        
-        // 读取UUID
-        if (nbt.contains("uuid")) {
-            affix.uuid = UUID.fromString(nbt.getString("uuid"));
+        if (nbt == null || !nbt.contains(AFFIX_ID_KEY) || !nbt.contains(AFFIX_NAME_KEY)) {
+            JustDying.LOGGER.warn("尝试从无效的NBT数据创建词缀");
+            return null;
         }
         
-        // 读取物品类型
-        if (nbt.contains("itemType")) {
-            affix.itemType = nbt.getString("itemType");
-        }
-        
-        // 读取属性列表
-        if (nbt.contains("attributes", NbtElement.LIST_TYPE)) {
-            NbtList attributesList = nbt.getList("attributes", NbtElement.COMPOUND_TYPE);
-            for (int i = 0; i < attributesList.size(); i++) {
-                NbtCompound attributeNbt = attributesList.getCompound(i);
-                AffixAttribute attribute = AffixAttribute.fromNbt(attributeNbt);
-                affix.attributes.add(attribute);
+        try {
+            Identifier id = new Identifier(nbt.getString(AFFIX_ID_KEY));
+            String name = nbt.getString(AFFIX_NAME_KEY);
+            Formatting formatting = Formatting.byName(nbt.getString(AFFIX_FORMATTING_KEY));
+            
+            Affix affix = new Affix(id, name, formatting);
+            
+            // 读取UUID
+            if (nbt.contains(AFFIX_UUID_KEY)) {
+                affix.uuid = UUID.fromString(nbt.getString(AFFIX_UUID_KEY));
             }
-        }
-        
-        // 读取效果列表
-        if (nbt.contains("effects", NbtElement.LIST_TYPE)) {
-            NbtList effectsList = nbt.getList("effects", NbtElement.COMPOUND_TYPE);
-            for (int i = 0; i < effectsList.size(); i++) {
-                NbtCompound effectNbt = effectsList.getCompound(i);
-                AffixEffect effect = AffixEffect.fromNbt(effectNbt);
-                affix.effects.add(effect);
+            
+            // 读取物品类型
+            if (nbt.contains(AFFIX_ITEM_TYPE_KEY)) {
+                affix.itemType = nbt.getString(AFFIX_ITEM_TYPE_KEY);
             }
+            
+            // 读取属性列表
+            if (nbt.contains(AFFIX_ATTRIBUTES_KEY, NbtElement.LIST_TYPE)) {
+                NbtList attributesList = nbt.getList(AFFIX_ATTRIBUTES_KEY, NbtElement.COMPOUND_TYPE);
+                for (int i = 0; i < attributesList.size(); i++) {
+                    NbtCompound attributeNbt = attributesList.getCompound(i);
+                    AffixAttribute attribute = AffixAttribute.fromNbt(attributeNbt);
+                    if (attribute != null) {
+                        affix.attributes.add(attribute);
+                    }
+                }
+            }
+            
+            // 读取效果列表
+            if (nbt.contains(AFFIX_EFFECTS_KEY, NbtElement.LIST_TYPE)) {
+                NbtList effectsList = nbt.getList(AFFIX_EFFECTS_KEY, NbtElement.COMPOUND_TYPE);
+                for (int i = 0; i < effectsList.size(); i++) {
+                    NbtCompound effectNbt = effectsList.getCompound(i);
+                    AffixEffect effect = AffixEffect.fromNbt(effectNbt);
+                    if (effect != null) {
+                        affix.effects.add(effect);
+                    }
+                }
+            }
+            
+            return affix;
+        } catch (Exception e) {
+            JustDying.LOGGER.error("从NBT创建词缀时出错: " + e.getMessage());
+            return null;
         }
-        
-        return affix;
     }
     
     /**
@@ -113,25 +140,25 @@ public class Affix {
      */
     public NbtCompound toNbt() {
         NbtCompound nbt = new NbtCompound();
-        nbt.putString("id", id.toString());
-        nbt.putString("name", name);
-        nbt.putString("formatting", formatting.getName());
-        nbt.putString("uuid", uuid.toString());
-        nbt.putString("itemType", itemType);
+        nbt.putString(AFFIX_ID_KEY, id.toString());
+        nbt.putString(AFFIX_NAME_KEY, name);
+        nbt.putString(AFFIX_FORMATTING_KEY, formatting.getName());
+        nbt.putString(AFFIX_UUID_KEY, uuid.toString());
+        nbt.putString(AFFIX_ITEM_TYPE_KEY, itemType);
         
         // 保存属性列表
         NbtList attributesList = new NbtList();
         for (AffixAttribute attribute : attributes) {
             attributesList.add(attribute.toNbt());
         }
-        nbt.put("attributes", attributesList);
+        nbt.put(AFFIX_ATTRIBUTES_KEY, attributesList);
         
         // 保存效果列表
         NbtList effectsList = new NbtList();
         for (AffixEffect effect : effects) {
             effectsList.add(effect.toNbt());
         }
-        nbt.put("effects", effectsList);
+        nbt.put(AFFIX_EFFECTS_KEY, effectsList);
         
         return nbt;
     }
@@ -143,7 +170,7 @@ public class Affix {
      * @return 当前词缀实例
      */
     public Affix setItemType(String itemType) {
-        this.itemType = itemType;
+        this.itemType = itemType != null ? itemType : ITEM_TYPE_ANY;
         return this;
     }
     
@@ -163,7 +190,7 @@ public class Affix {
      * @return 是否适用
      */
     public boolean isApplicableTo(String type) {
-        return "ANY".equals(itemType) || itemType.equals(type);
+        return ITEM_TYPE_ANY.equals(itemType) || itemType.equals(type);
     }
     
     /**
@@ -173,7 +200,9 @@ public class Affix {
      * @return 当前词缀实例
      */
     public Affix addAttribute(AffixAttribute attribute) {
-        this.attributes.add(attribute);
+        if (attribute != null) {
+            this.attributes.add(attribute);
+        }
         return this;
     }
     
@@ -184,7 +213,9 @@ public class Affix {
      * @return 当前词缀实例
      */
     public Affix addEffect(AffixEffect effect) {
-        this.effects.add(effect);
+        if (effect != null) {
+            this.effects.add(effect);
+        }
         return this;
     }
     

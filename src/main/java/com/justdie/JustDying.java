@@ -29,13 +29,24 @@ import org.slf4j.LoggerFactory;
 
 /**
  * 模组主类
+ * 负责初始化模组的各个系统和组件
  */
 public class JustDying implements ModInitializer {
+	// 模组ID常量
 	public static final String MOD_ID = "justdying";
 
-	// This logger is used to write text to the console and the log file.
-	// It is considered best practice to use your mod id as the logger's name.
-	// That way, it's clear which mod wrote info, warnings, and errors.
+	// 日志常量
+	private static final String LOG_INITIALIZING = "初始化JustDying模组...";
+	private static final String LOG_INITIALIZED = "JustDying模组初始化完成，用时: {}ms";
+	private static final String LOG_CONFIG_LOADED = "配置加载完成，发现 {} 个属性定义";
+	private static final String LOG_CONFIG_FAILED = "配置加载失败，将使用默认配置: {}";
+	private static final String LOG_CONFIG_EMPTY = "检测到配置文件中没有属性定义，将使用默认配置";
+	private static final String LOG_PLAYER_JOINED = "玩家 {} 加入，同步所有属性数据";
+	private static final String LOG_AFFIX_DISABLED = "词缀系统已在配置中禁用";
+	private static final String LOG_AFFIX_INITIALIZING = "初始化词缀系统...";
+	private static final String LOG_AFFIX_INITIALIZED = "词缀系统初始化完成";
+	
+	// 日志记录器
 	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 	public static final Logger AFFIX_LOGGER = LoggerFactory.getLogger(MOD_ID + "_affix");
 
@@ -44,33 +55,66 @@ public class JustDying implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
-		LOGGER.info("初始化JustDying模组...");
-
-		// 注册配置
+		LOGGER.info(LOG_INITIALIZING);
+		long startTime = System.currentTimeMillis();
+		
+		try {
+			// 初始化核心系统
+			initializeCore();
+			
+			// 初始化网络和事件
+			initializeNetworkAndEvents();
+			
+			// 初始化命令系统
+			initializeCommands();
+			
+			// 初始化物品系统
+			initializeItems();
+			
+			// 初始化词缀系统
+			initializeAffixSystem();
+			
+			// 记录初始化完成
+			long duration = System.currentTimeMillis() - startTime;
+			LOGGER.info(LOG_INITIALIZED, duration);
+		} catch (Exception e) {
+			LOGGER.error("模组初始化过程中发生错误", e);
+		}
+	}
+	
+	/**
+	 * 初始化核心系统
+	 */
+	private void initializeCore() {
+		// 注册并加载配置
 		registerConfig();
 
 		// 初始化属性系统
 		AttributeManager.loadFromConfig(CONFIG);
-		
-		// 初始化属性Cap物品处理器
-		AttributeCapItemHandler.initialize();
-		
+	}
+	
+	/**
+	 * 初始化网络和事件系统
+	 */
+	private void initializeNetworkAndEvents() {
 		// 注册网络包处理器
 		AttributeUpdatePacket.register();
 		
-		// 注册命令
-		CommandRegistrationCallback.EVENT.register(AttributeCommands::register);
-		
 		// 注册玩家加入服务器事件，同步所有属性数据
 		registerPlayerJoinEvent();
+	}
+	
+	/**
+	 * 初始化命令系统
+	 */
+	private void initializeCommands() {
+		// 注册属性命令
+		AttributeCommands.register();
 		
-		// 初始化词缀系统
-		initAffixSystem();
-		
-		// 注册物品和物品组
-		registerItems();
-
-		LOGGER.info("JustDying模组初始化完成");
+		// 注册词缀命令（如果启用）
+		if (CONFIG.affixes.enableAffixCommands) {
+			CommandRegistrationCallback.EVENT.register(AffixCommand::register);
+		}
 	}
 	
 	/**
@@ -85,16 +129,53 @@ public class JustDying implements ModInitializer {
 			CONFIG = AutoConfig.getConfigHolder(JustDyingConfig.class).getConfig();
 			
 			// 检查配置是否有效
-			if (CONFIG.attributes.attributes.isEmpty()) {
-				LOGGER.warn("检测到配置文件中没有属性定义，将使用默认配置");
-				CONFIG = DefaultConfig.createDefaultConfig();
-				AutoConfig.getConfigHolder(JustDyingConfig.class).save();
-			}
+			validateConfig();
 			
-			LOGGER.info("配置加载完成，发现 {} 个属性定义", CONFIG.attributes.attributes.size());
+			LOGGER.info(LOG_CONFIG_LOADED, CONFIG.attributes.attributes.size());
 		} catch (Exception e) {
-			LOGGER.error("配置加载失败，将使用默认配置: {}", e.getMessage());
+			LOGGER.error(LOG_CONFIG_FAILED, e.getMessage());
 			CONFIG = DefaultConfig.createDefaultConfig();
+		}
+	}
+	
+	/**
+	 * 验证配置并处理无效配置
+	 */
+	private void validateConfig() {
+		if (CONFIG.attributes.attributes == null || CONFIG.attributes.attributes.isEmpty()) {
+			LOGGER.warn(LOG_CONFIG_EMPTY);
+			CONFIG = DefaultConfig.createDefaultConfig();
+			
+			// 确保配置被保存到磁盘
+			saveConfig();
+			
+			// 再次验证
+			if (CONFIG.attributes.attributes.isEmpty()) {
+				LOGGER.error("无法加载默认属性，属性列表仍然为空！");
+			} else {
+				LOGGER.info("已使用预设配置，包含 {} 个属性", CONFIG.attributes.attributes.size());
+			}
+		}
+	}
+	
+	/**
+	 * 保存当前配置
+	 */
+	private void saveConfig() {
+		try {
+			// 获取配置持有者
+			var configHolder = AutoConfig.getConfigHolder(JustDyingConfig.class);
+			
+			// 确保最新配置已经应用
+			configHolder.setConfig(CONFIG);
+			
+			// 保存配置
+			configHolder.save();
+			
+			LOGGER.info("配置已成功保存到磁盘");
+		} catch (Exception e) {
+			LOGGER.error("保存配置失败: {}", e.getMessage());
+			e.printStackTrace();
 		}
 	}
 	
@@ -108,15 +189,18 @@ public class JustDying implements ModInitializer {
 			
 			// 仅在调试模式下输出详细日志
 			if (CONFIG.debug) {
-				LOGGER.debug("Player {} joined, synced all attributes", player.getName().getString());
+				LOGGER.debug(LOG_PLAYER_JOINED, player.getName().getString());
 			}
 		});
 	}
 	
 	/**
-	 * 注册所有物品和物品组
+	 * 初始化物品系统
 	 */
-	private void registerItems() {
+	private void initializeItems() {
+		// 初始化属性Cap物品处理器
+		AttributeCapItemHandler.initialize();
+		
 		// 注册模组物品
 		ModItems.register();
 		
@@ -133,26 +217,25 @@ public class JustDying implements ModInitializer {
 	/**
 	 * 初始化词缀系统
 	 */
-	private void initAffixSystem() {
+	private void initializeAffixSystem() {
 		if (!CONFIG.affixes.enableAffixes) {
-			AFFIX_LOGGER.info("词缀系统已在配置中禁用");
+			AFFIX_LOGGER.info(LOG_AFFIX_DISABLED);
 			return;
 		}
 		
-		AFFIX_LOGGER.info("初始化词缀系统...");
+		AFFIX_LOGGER.info(LOG_AFFIX_INITIALIZING);
 		
+		try {
 		// 初始化词缀管理器
 		AffixManager.init();
-		
-		// 注册词缀命令
-		if (CONFIG.affixes.enableAffixCommands) {
-			CommandRegistrationCallback.EVENT.register(AffixCommand::register);
-		}
 		
 		// 注册事件处理器
 		AffixEventHandler.register();
 		
-		AFFIX_LOGGER.info("词缀系统初始化完成");
+			AFFIX_LOGGER.info(LOG_AFFIX_INITIALIZED);
+		} catch (Exception e) {
+			AFFIX_LOGGER.error("词缀系统初始化失败", e);
+		}
 	}
 	
 	/**
@@ -161,11 +244,17 @@ public class JustDying implements ModInitializer {
 	 * @param player 玩家
 	 */
 	private void syncAllAttributes(ServerPlayerEntity player) {
+		if (player == null) {
+			return;
+		}
+		
 		// 使用批处理方式减少网络开销
 		AttributeManager.getAllAttributes().forEach(attribute -> {
+			Identifier attributeId = attribute.getId();
+			
 			PacketByteBuf buf = PacketByteBufs.create();
-			buf.writeString(attribute.getId().toString());
-			buf.writeInt(AttributeHelper.getAttributeValue(player, attribute.getId()));
+			buf.writeString(attributeId.toString());
+			buf.writeInt(AttributeHelper.getAttributeValue(player, attributeId));
 			buf.writeInt(AttributeHelper.getAvailablePoints(player));
 			
 			ServerPlayNetworking.send(player, AttributeUpdatePacket.SYNC_ATTRIBUTES_ID, buf);
@@ -183,6 +272,9 @@ public class JustDying implements ModInitializer {
 	
 	/**
 	 * 创建一个属于该模组的标识符
+	 * 
+	 * @param path 路径
+	 * @return 模组命名空间的标识符
 	 */
 	public static Identifier id(String path) {
 		return new Identifier(MOD_ID, path);

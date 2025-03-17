@@ -4,7 +4,6 @@ import com.justdie.JustDying;
 import com.justdie.attribute.AttributeManager;
 import com.justdie.attribute.AttributeHelper;
 import com.justdie.attribute.JustDyingAttribute;
-import com.justdie.attribute.JustDyingAttributeType;
 import com.justdie.network.ClientAttributePackets;
 import com.justdie.attribute.LevelExchangeManager;
 import net.minecraft.client.gui.DrawContext;
@@ -48,7 +47,12 @@ public class AttributeScreen extends Screen {
     private final Map<String, ItemStack> itemStackCache = new ConcurrentHashMap<>();
 
     // 属性类型映射
-    private final Map<String, JustDyingAttributeType> attributeTypeMap;
+    private final Map<String, Integer> attributePoints;
+    private final Map<String, Integer> maxAttributePoints;
+    private final Map<String, Integer> minAttributePoints;
+    private final Map<String, String> attributeNames;
+    private final Map<String, String> attributeDescriptions;
+    private final Map<String, String> attributeIcons;
 
     // 翻页按钮
     private ButtonWidget upButton;
@@ -73,7 +77,12 @@ public class AttributeScreen extends Screen {
         this.attributes = new ArrayList<>(AttributeManager.getAllAttributes());
 
         // 初始化属性类型映射
-        this.attributeTypeMap = new ConcurrentHashMap<>();
+        this.attributePoints = new ConcurrentHashMap<>();
+        this.maxAttributePoints = new ConcurrentHashMap<>();
+        this.minAttributePoints = new ConcurrentHashMap<>();
+        this.attributeNames = new ConcurrentHashMap<>();
+        this.attributeDescriptions = new ConcurrentHashMap<>();
+        this.attributeIcons = new ConcurrentHashMap<>();
         initAttributeTypeMap();
 
         // 打开面板时请求服务器同步最新数据
@@ -84,11 +93,7 @@ public class AttributeScreen extends Screen {
      * 初始化属性类型映射
      */
     private void initAttributeTypeMap() {
-        attributeTypeMap.put("constitution", JustDyingAttributeType.CONSTITUTION);
-        attributeTypeMap.put("strength", JustDyingAttributeType.STRENGTH);
-        attributeTypeMap.put("defense", JustDyingAttributeType.DEFENSE);
-        attributeTypeMap.put("speed", JustDyingAttributeType.SPEED);
-        attributeTypeMap.put("luck", JustDyingAttributeType.LUCK);
+        // 不再需要初始化属性类型映射
     }
 
     /**
@@ -144,24 +149,31 @@ public class AttributeScreen extends Screen {
         // 清除旧按钮
         resetButtons();
         
-        // 添加翻页按钮
-        int buttonY = cachedTop + GUI_HEIGHT - 30;
-        
-        // 上翻按钮
-        upButton = this.addDrawableChild(new AttributeButton(
-                cachedLeft + GUI_WIDTH / 2 - BUTTON_WIDTH - BUTTON_SPACING,
-                buttonY,
-                BUTTON_WIDTH, BUTTON_HEIGHT,
-                Text.literal("↑"),
-                button -> scrollUp()));
+        // 只有当属性数量超过可见数量时才添加翻页按钮
+        if (attributes.size() > getVisibleAttributeCount()) {
+            // 添加翻页按钮
+            int buttonY = cachedTop + GUI_HEIGHT - 30;
+            
+            // 上翻按钮
+            upButton = this.addDrawableChild(new AttributeButton(
+                    cachedLeft + GUI_WIDTH / 2 - BUTTON_WIDTH - BUTTON_SPACING,
+                    buttonY,
+                    BUTTON_WIDTH, BUTTON_HEIGHT,
+                    Text.literal("↑"),
+                    button -> scrollUp()));
 
-        // 下翻按钮
-        downButton = this.addDrawableChild(new AttributeButton(
-                cachedLeft + GUI_WIDTH / 2 + BUTTON_SPACING,
-                buttonY,
-                BUTTON_WIDTH, BUTTON_HEIGHT,
-                Text.literal("↓"),
-                button -> scrollDown()));
+            // 下翻按钮
+            downButton = this.addDrawableChild(new AttributeButton(
+                    cachedLeft + GUI_WIDTH / 2 + BUTTON_SPACING,
+                    buttonY,
+                    BUTTON_WIDTH, BUTTON_HEIGHT,
+                    Text.literal("↓"),
+                    button -> scrollDown()));
+        } else {
+            // 如果不需要翻页按钮，将它们设为null
+            upButton = null;
+            downButton = null;
+        }
         
         // 为每个可见的属性添加增减按钮
         addAttributeButtons();
@@ -207,9 +219,11 @@ public class AttributeScreen extends Screen {
      * 更新按钮状态
      */
     private void updateButtonStates() {
-        // 更新翻页按钮状态
-        upButton.active = scrollOffset > 0;
-        downButton.active = scrollOffset + getVisibleAttributeCount() < attributes.size();
+        // 只有当按钮存在时才更新其状态
+        if (upButton != null && downButton != null) {
+            upButton.active = scrollOffset > 0;
+            downButton.active = scrollOffset + getVisibleAttributeCount() < attributes.size();
+        }
         
         // 更新增减按钮状态 - 遍历所有子元素
         for (Element element : this.children()) {
@@ -285,8 +299,7 @@ public class AttributeScreen extends Screen {
                 context.drawItem(stack, cachedLeft + PADDING, attributeY);
             } else {
                 // 如果物品获取失败，使用预定义图标作为后备选项
-                JustDyingAttributeType attributeType = attributeTypeMap.getOrDefault(attributePath, JustDyingAttributeType.CONSTITUTION);
-                AttributeIcons.renderIcon(context, attributeType, cachedLeft + PADDING, attributeY);
+                renderAttributeIcon(context, attributePath, attributeY);
             }
 
             // 绘制属性名称
@@ -488,5 +501,9 @@ public class AttributeScreen extends Screen {
         updateButtonStates();
         
         JustDying.LOGGER.debug("属性面板已刷新 - 可用点数: {}", availablePoints);
+    }
+
+    private void renderAttributeIcon(DrawContext context, String attributePath, int attributeY) {
+        AttributeIcons.renderIcon(context, attributePath, cachedLeft + PADDING, attributeY);
     }
 }

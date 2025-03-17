@@ -16,9 +16,21 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 属性上限增加物品
- * 这个类表示可以增加玩家属性上限的物品
+ * 此类表示可以增加玩家属性上限的物品，玩家可以使用它来提高自身的属性上限。
+ * 每个AttributeCapItem实例关联一个特定的属性ID和名称。
  */
 public class AttributeCapItem extends Item {
+    // 常量定义
+    private static final String DEFAULT_ATTRIBUTE_PATH = "unknown";
+    private static final String DEFAULT_ATTRIBUTE_NAME = "未知属性";
+    private static final int DEFAULT_INCREASE_AMOUNT = 5;
+    private static final int CACHE_INITIAL_CAPACITY = 16;
+    
+    // 错误消息
+    private static final String ERROR_TOOLTIP_CREATION = "创建属性上限物品工具提示失败: {}";
+    private static final String DEFAULT_TOOLTIP_FORMAT = "增加 %s 属性上限 %d 点";
+    private static final String TOOLTIP_TRANSLATION_KEY = "item.justdying.attribute_cap_item.tooltip";
+    
     // 属性相关数据
     private final Identifier attributeId;
     private final String attributeName;
@@ -28,8 +40,8 @@ public class AttributeCapItem extends Item {
     private volatile Text cachedTooltip; 
 
     // 全局工具提示文本缓存，使用属性名和增加量作为键
-    // 改用ConcurrentHashMap提高并发性能
-    private static final Map<CacheKey, Text> TOOLTIP_CACHE = new ConcurrentHashMap<>(16);
+    // 使用ConcurrentHashMap提高并发性能
+    private static final Map<CacheKey, Text> TOOLTIP_CACHE = new ConcurrentHashMap<>(CACHE_INITIAL_CAPACITY);
 
     /**
      * 缓存键，使用属性名和增加量作为组合键
@@ -74,8 +86,9 @@ public class AttributeCapItem extends Item {
      */
     public AttributeCapItem(Settings settings, String attributePath, String attributeName, Formatting formatting) {
         super(settings);
-        this.attributeId = new Identifier(JustDying.MOD_ID, attributePath != null ? attributePath : "unknown");
-        this.attributeName = attributeName != null ? attributeName : "未知属性";
+        this.attributeId = new Identifier(JustDying.MOD_ID, 
+                attributePath != null ? attributePath : DEFAULT_ATTRIBUTE_PATH);
+        this.attributeName = attributeName != null ? attributeName : DEFAULT_ATTRIBUTE_NAME;
         this.formatting = formatting != null ? formatting : Formatting.WHITE;
     }
 
@@ -83,20 +96,40 @@ public class AttributeCapItem extends Item {
     public void appendTooltip(ItemStack stack, World world, List<Text> tooltip, TooltipContext context) {
         super.appendTooltip(stack, world, tooltip, context);
 
+        if (tooltip == null) {
+            return;
+        }
+
         // 延迟初始化缓存的工具提示，使用双重检查锁定模式确保线程安全
         Text localTooltip = cachedTooltip;
         if (localTooltip == null) {
             synchronized (this) {
                 localTooltip = cachedTooltip;
                 if (localTooltip == null) {
-                    int increaseAmount = JustDying.getConfig() != null ? 
-                        JustDying.getConfig().attributes.attributeCapItems.increaseAmountPerUse : 5;
+                    int increaseAmount = getIncreaseAmount();
                     cachedTooltip = localTooltip = getTooltipText(attributeName, increaseAmount);
                 }
             }
         }
 
         tooltip.add(localTooltip);
+    }
+
+    /**
+     * 获取从配置中读取的增加数量，如果配置不可用则使用默认值
+     * 
+     * @return 属性增加数量
+     */
+    private int getIncreaseAmount() {
+        try {
+            if (JustDying.getConfig() != null && JustDying.getConfig().attributes != null 
+                    && JustDying.getConfig().attributes.attributeCapItems != null) {
+                return JustDying.getConfig().attributes.attributeCapItems.increaseAmountPerUse;
+            }
+        } catch (Exception e) {
+            JustDying.LOGGER.warn("读取属性增加数量配置失败，使用默认值: {}", e.getMessage());
+        }
+        return DEFAULT_INCREASE_AMOUNT;
     }
 
     /**
@@ -107,16 +140,22 @@ public class AttributeCapItem extends Item {
      * @return 格式化的工具提示文本
      */
     private Text getTooltipText(String attrName, int amount) {
-        CacheKey key = new CacheKey(attrName, amount);
+        if (attrName == null || attrName.isEmpty()) {
+            attrName = DEFAULT_ATTRIBUTE_NAME;
+        }
+        
+        final String finalAttrName = attrName;
+        CacheKey key = new CacheKey(finalAttrName, amount);
+        
         return TOOLTIP_CACHE.computeIfAbsent(key,
                 k -> {
                     try {
-                        return Text.translatable("item.justdying.attribute_cap_item.tooltip", k.attributeName, k.amount)
+                        return Text.translatable(TOOLTIP_TRANSLATION_KEY, k.attributeName, k.amount)
                                 .formatted(formatting);
                     } catch (Exception e) {
-                        JustDying.LOGGER.error("创建属性上限物品工具提示失败: {}", e.getMessage());
+                        JustDying.LOGGER.error(ERROR_TOOLTIP_CREATION, e.getMessage());
                         // 提供一个默认值，避免返回null
-                        return Text.literal(String.format("增加 %s 属性上限 %d 点", k.attributeName, k.amount))
+                        return Text.literal(String.format(DEFAULT_TOOLTIP_FORMAT, k.attributeName, k.amount))
                                 .formatted(formatting);
                     }
                 });
@@ -148,12 +187,13 @@ public class AttributeCapItem extends Item {
     public Formatting getFormatting() {
         return formatting;
     }
-    
+
     /**
-     * 清除所有缓存的工具提示
-     * 当配置更新时可以调用此方法
+     * 清除工具提示缓存
+     * 当配置更新时应调用此方法
      */
     public static void clearTooltipCache() {
         TOOLTIP_CACHE.clear();
+        JustDying.LOGGER.debug("已清除AttributeCapItem工具提示缓存");
     }
 }

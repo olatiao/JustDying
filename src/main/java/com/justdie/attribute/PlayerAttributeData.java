@@ -36,9 +36,9 @@ public class PlayerAttributeData {
     public PlayerAttributeData(PlayerEntity player) {
         this.player = player;
         
-        // 初始化所有属性为默认值
+        // 初始化所有属性为初始值
         for (JustDyingAttribute attribute : AttributeManager.getAllAttributes()) {
-            attributeValues.put(attribute.getId(), attribute.getDefaultValue());
+            attributeValues.put(attribute.getId(), attribute.getInitialValue());
         }
     }
     
@@ -88,7 +88,7 @@ public class PlayerAttributeData {
      * @param attribute 属性
      * @param value 属性值
      */
-    private void updateVanillaAttribute(JustDyingAttribute attribute, int value) {
+    public void updateVanillaAttribute(JustDyingAttribute attribute, int value) {
         if (attribute.getVanillaAttribute() == null || player == null) {
             JustDying.LOGGER.debug("Cannot update vanilla attribute for {}: attribute or player is null", 
                     attribute != null ? attribute.getId() : "null");
@@ -200,5 +200,16 @@ public class PlayerAttributeData {
         }
         
         nbt.put("Attributes", attributesNbt);
+    }
+
+    /**
+     * 初始化属性数据
+     * 
+     * @param attribute 要初始化的属性
+     */
+    public void initAttribute(JustDyingAttribute attribute) {
+        if (!attributeValues.containsKey(attribute.getId())) {
+            attributeValues.put(attribute.getId(), attribute.getInitialValue());
+        }
     }
 } 

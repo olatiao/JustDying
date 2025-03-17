@@ -10,12 +10,10 @@ import net.minecraft.util.Identifier;
  */
 public class PlayerAttributeComponentImpl implements PlayerAttributeComponent {
     private final PlayerAttributeData attributeData;
-    private final PlayerEntity player;
     private int availablePoints; // 可用属性点
     private static final String POINTS_KEY = "AttributePoints";
     
     public PlayerAttributeComponentImpl(PlayerEntity player) {
-        this.player = player;
         this.attributeData = new PlayerAttributeData(player);
         
         // 从配置文件中获取初始属性点
