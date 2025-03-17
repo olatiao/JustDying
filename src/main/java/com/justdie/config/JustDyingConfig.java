@@ -127,6 +127,10 @@ public class JustDyingConfig implements ConfigData {
 
                 @ConfigEntry.Gui.Tooltip
                 public String capItemId = ""; // 属性上限增加物品的ID
+                
+                @ConfigEntry.Gui.Tooltip(count = 2)
+                @ConfigEntry.BoundedDiscrete(min = 0, max = 100)
+                public int sortOrder = 0; // 属性在界面中的排序顺序，值越小越靠前
 
                 // 无参构造函数，用于序列化
                 public AttributeConfig() {
@@ -146,6 +150,7 @@ public class JustDyingConfig implements ConfigData {
                         this.enabled = true;
                         this.enableCapItem = enableCapItem;
                         this.capItemId = capItemId;
+                        this.sortOrder = 0; // 默认排序值为0
                 }
                 
                 /**

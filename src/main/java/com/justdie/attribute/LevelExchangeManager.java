@@ -13,13 +13,13 @@ import net.minecraft.util.Identifier;
 public class LevelExchangeManager {
     // 常量定义
     private static final String DEBUG_PLAYER_EXCHANGE = "玩家 {} 尝试兑换等级 {} 为属性点，初始点数: {}";
-    private static final String DEBUG_POINTS_USED = "玩家 {} 属性已使用 {} 点";
+    private static final String DEBUG_POINTS_USED = "玩家 {} 属性已使用 {} 点，未使用 {} 点，总计 {} 点";
     private static final String DEBUG_REQUIRED_LEVEL = "兑换所需等级: {}";
     private static final String DEBUG_EXCHANGE_SUCCESS = "兑换成功，玩家新等级: {}, 新点数: {}";
     private static final String DEBUG_EXCHANGE_FAILED = "兑换失败，玩家等级不足";
     
-    // 最大等级上限
-    private static final int MAX_LEVEL_REQUIRED = 100;
+    // 移除等级上限或设置为极高的值
+    private static final int MAX_LEVEL_REQUIRED = Integer.MAX_VALUE; // 修改为Integer.MAX_VALUE，实际上移除了上限
     
     /**
      * 计算兑换所需的等级
@@ -38,11 +38,22 @@ public class LevelExchangeManager {
         // 计算玩家已使用的点数
         int usedPoints = calculateUsedPoints(player);
         
-        // 计算所需等级 = 基础等级 + (已使用点数 * 等级乘数)
-        int requiredLevel = config.levelExchange.baseLevel + (usedPoints * config.levelExchange.levelMultiplier);
+        // 获取玩家当前可用的属性点
+        int availablePoints = AttributeHelper.getAvailablePoints(player);
         
-        // 确保所需等级不超过最大等级限制
-        return Math.min(requiredLevel, MAX_LEVEL_REQUIRED);
+        // 计算总点数 = 已使用点数 + 可用点数
+        int totalPoints = usedPoints + availablePoints;
+        
+        // 计算所需等级 = 基础等级 + (总点数 * 等级乘数)
+        int requiredLevel = config.levelExchange.baseLevel + (totalPoints * config.levelExchange.levelMultiplier);
+        
+        if (config.debug) {
+            JustDying.LOGGER.debug("玩家 {} 总点数: {}，已使用: {}，可用: {}，所需等级: {}", 
+                player.getName().getString(), totalPoints, usedPoints, availablePoints, requiredLevel);
+        }
+        
+        // 等级不再受到上限限制
+        return requiredLevel;
     }
     
     /**
@@ -95,7 +106,8 @@ public class LevelExchangeManager {
                     player.getName().getString(), currentLevel, availablePoints);
             
             int usedPoints = calculateUsedPoints(player);
-            JustDying.LOGGER.debug(DEBUG_POINTS_USED, player.getName().getString(), usedPoints);
+            JustDying.LOGGER.debug(DEBUG_POINTS_USED, 
+                    player.getName().getString(), usedPoints, availablePoints, usedPoints + availablePoints);
         }
         
         // 计算兑换所需等级
