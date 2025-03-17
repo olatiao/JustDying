@@ -11,7 +11,6 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.CommandRegistryAccess;
-import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -21,7 +20,6 @@ import net.minecraft.util.Identifier;
 
 import java.util.Collection;
 import java.util.Optional;
-import java.util.Objects;
 
 /**
  * 属性命令处理类
@@ -29,12 +27,15 @@ import java.util.Objects;
  */
 public class AttributeCommands {
     // 命令常量定义
-    private static final String CMD_ROOT = "attribute";
+    private static final String CMD_ROOT = "attributes";
     private static final String CMD_GET = "get";
     private static final String CMD_SET = "set";
     private static final String CMD_POINTS = "points";
     private static final String CMD_ADD_POINTS = "addpoints";
     private static final String CMD_MAX = "max";
+    private static final String CMD_MAX_INCREASE = "increase";
+    private static final String CMD_MAX_DECREASE = "decrease";
+    private static final String CMD_MAX_SET = "set";
     private static final String CMD_LIST = "list";
     private static final String CMD_HELP = "help";
     
@@ -51,6 +52,8 @@ public class AttributeCommands {
     private static final String MSG_POINTS_SET = "已设置 %s 的可用点数为 %d";
     private static final String MSG_POINTS_ADDED = "已为 %s 添加 %d 点数";
     private static final String MSG_MAX_VALUE_SET = "已设置 %s 的最大值为 %d";
+    private static final String MSG_MAX_VALUE_INCREASED = "已增加 %s 的最大值 %d 点，现在为 %d";
+    private static final String MSG_MAX_VALUE_DECREASED = "已减少 %s 的最大值 %d 点，现在为 %d";
     private static final String MSG_ATTRIBUTE_NOT_FOUND = "找不到属性: %s";
     private static final String MSG_ERROR_GETTING_ATTRIBUTE = "获取属性 %s 时出错";
     private static final String MSG_PLAYER_NOT_FOUND = "找不到玩家: %s";
@@ -60,12 +63,14 @@ public class AttributeCommands {
     private static final String MSG_LIST_HEADER = "可用属性:";
     private static final String MSG_LIST_ITEM = " - %s (%s): %d/%d";
     private static final String MSG_HELP_HEADER = "属性命令帮助:";
-    private static final String MSG_HELP_GET = " - /attribute get <属性>: 查看属性值";
-    private static final String MSG_HELP_SET = " - /attribute set <属性> <值> [玩家]: 设置属性值";
-    private static final String MSG_HELP_POINTS = " - /attribute points: 查看可用点数";
-    private static final String MSG_HELP_ADD_POINTS = " - /attribute addpoints <点数> [玩家]: 添加可用点数";
-    private static final String MSG_HELP_MAX = " - /attribute max <属性> <值>: 设置属性最大值";
-    private static final String MSG_HELP_LIST = " - /attribute list: 列出所有属性";
+    private static final String MSG_HELP_GET = " - /attributes get <属性>: 查看属性值";
+    private static final String MSG_HELP_SET = " - /attributes set <属性> <值> [玩家]: 设置属性值";
+    private static final String MSG_HELP_POINTS = " - /attributes points: 查看可用点数";
+    private static final String MSG_HELP_ADD_POINTS = " - /attributes addpoints <点数> [玩家]: 添加可用点数";
+    private static final String MSG_HELP_MAX = " - /attributes max set <属性> <值>: 设置属性最大值";
+    private static final String MSG_HELP_MAX_INCREASE = " - /attributes max increase <属性> <值>: 增加属性最大值";
+    private static final String MSG_HELP_MAX_DECREASE = " - /attributes max decrease <属性> <值>: 减少属性最大值";
+    private static final String MSG_HELP_LIST = " - /attributes list: 列出所有属性";
     
     // 权限等级
     private static final int PERMISSION_LEVEL_ADMIN = 2;
@@ -335,24 +340,70 @@ public class AttributeCommands {
             CommandManager.literal(CMD_ROOT)
                 .requires(source -> source.hasPermissionLevel(PERMISSION_LEVEL_ADMIN))
                 .then(CommandManager.literal(CMD_MAX)
-                    .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
-                        .suggests((context, builder) -> {
-                            AttributeManager.getAllAttributes().forEach(attr -> 
-                                builder.suggest(attr.getId().getPath()));
-                            return builder.buildFuture();
-                        })
-                        .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(1))
-                            .executes(context -> {
-                                try {
-                                    return setMaxValueCommand(
-                                            context,
-                                            StringArgumentType.getString(context, ARG_ATTRIBUTE),
-                                            IntegerArgumentType.getInteger(context, ARG_VALUE));
-                                } catch (Exception e) {
-                                    handleCommandException(context, e);
-                                    return 0;
-                                }
+                    .then(CommandManager.literal(CMD_MAX_SET)
+                        .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
+                            .suggests((context, builder) -> {
+                                AttributeManager.getAllAttributes().forEach(attr -> 
+                                    builder.suggest(attr.getId().getPath()));
+                                return builder.buildFuture();
                             })
+                            .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(1))
+                                .executes(context -> {
+                                    try {
+                                        return setMaxValueCommand(
+                                                context,
+                                                StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                                IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                    } catch (Exception e) {
+                                        handleCommandException(context, e);
+                                        return 0;
+                                    }
+                                })
+                            )
+                        )
+                    )
+                    .then(CommandManager.literal(CMD_MAX_INCREASE)
+                        .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
+                            .suggests((context, builder) -> {
+                                AttributeManager.getAllAttributes().forEach(attr -> 
+                                    builder.suggest(attr.getId().getPath()));
+                                return builder.buildFuture();
+                            })
+                            .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(1))
+                                .executes(context -> {
+                                    try {
+                                        return increaseMaxValueCommand(
+                                                context,
+                                                StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                                IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                    } catch (Exception e) {
+                                        handleCommandException(context, e);
+                                        return 0;
+                                    }
+                                })
+                            )
+                        )
+                    )
+                    .then(CommandManager.literal(CMD_MAX_DECREASE)
+                        .then(CommandManager.argument(ARG_ATTRIBUTE, StringArgumentType.word())
+                            .suggests((context, builder) -> {
+                                AttributeManager.getAllAttributes().forEach(attr -> 
+                                    builder.suggest(attr.getId().getPath()));
+                                return builder.buildFuture();
+                            })
+                            .then(CommandManager.argument(ARG_VALUE, IntegerArgumentType.integer(1))
+                                .executes(context -> {
+                                    try {
+                                        return decreaseMaxValueCommand(
+                                                context,
+                                                StringArgumentType.getString(context, ARG_ATTRIBUTE),
+                                                IntegerArgumentType.getInteger(context, ARG_VALUE));
+                                    } catch (Exception e) {
+                                        handleCommandException(context, e);
+                                        return 0;
+                                    }
+                                })
+                            )
                         )
                     )
                 )
@@ -493,7 +544,6 @@ public class AttributeCommands {
     
     /**
      * 处理设置最大值命令
-     * 注意：此方法目前尚不支持持久化到配置文件
      */
     private static int setMaxValueCommand(
             CommandContext<ServerCommandSource> context, 
@@ -505,8 +555,96 @@ public class AttributeCommands {
             return 0;
         }
         
-        sendErrorMessage(context, "设置最大值功能尚未实现");
-        return 0;
+        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
+        
+        // 验证属性存在
+        if (!validateAttribute(context, attributeId)) {
+            return 0;
+        }
+        
+        Optional<JustDyingAttribute> attribute = AttributeManager.getAttribute(attributeId);
+        if (attribute.isPresent()) {
+            attribute.get().setMaxValue(maxValue);
+            
+            // 发送成功消息
+            sendSuccessMessage(context, MSG_MAX_VALUE_SET, attributeName, maxValue);
+            return 1;
+        } else {
+            sendErrorMessage(context, MSG_ATTRIBUTE_NOT_FOUND, attributeName);
+            return 0;
+        }
+    }
+    
+    /**
+     * 处理增加最大值命令
+     */
+    private static int increaseMaxValueCommand(
+            CommandContext<ServerCommandSource> context, 
+            String attributeName, 
+            int increaseAmount) {
+        
+        if (increaseAmount <= 0) {
+            sendErrorMessage(context, MSG_INVALID_VALUE, increaseAmount);
+            return 0;
+        }
+        
+        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
+        
+        // 验证属性存在
+        if (!validateAttribute(context, attributeId)) {
+            return 0;
+        }
+        
+        Optional<JustDyingAttribute> attribute = AttributeManager.getAttribute(attributeId);
+        if (attribute.isPresent()) {
+            JustDyingAttribute attr = attribute.get();
+            int currentMax = attr.getMaxValue();
+            int newMax = currentMax + increaseAmount;
+            attr.setMaxValue(newMax);
+            
+            // 发送成功消息
+            sendSuccessMessage(context, MSG_MAX_VALUE_INCREASED, attributeName, increaseAmount, newMax);
+            return 1;
+        } else {
+            sendErrorMessage(context, MSG_ATTRIBUTE_NOT_FOUND, attributeName);
+            return 0;
+        }
+    }
+    
+    /**
+     * 处理减少最大值命令
+     */
+    private static int decreaseMaxValueCommand(
+            CommandContext<ServerCommandSource> context, 
+            String attributeName, 
+            int decreaseAmount) {
+        
+        if (decreaseAmount <= 0) {
+            sendErrorMessage(context, MSG_INVALID_VALUE, decreaseAmount);
+            return 0;
+        }
+        
+        Identifier attributeId = new Identifier(JustDying.MOD_ID, attributeName);
+        
+        // 验证属性存在
+        if (!validateAttribute(context, attributeId)) {
+            return 0;
+        }
+        
+        Optional<JustDyingAttribute> attribute = AttributeManager.getAttribute(attributeId);
+        if (attribute.isPresent()) {
+            JustDyingAttribute attr = attribute.get();
+            int currentMax = attr.getMaxValue();
+            int newMax = Math.max(1, currentMax - decreaseAmount); // 确保最大值至少为1
+            attr.setMaxValue(newMax);
+            
+            // 发送成功消息
+            sendSuccessMessage(context, MSG_MAX_VALUE_DECREASED, attributeName, decreaseAmount, newMax);
+            return 1;
+        } else {
+            sendErrorMessage(context, MSG_ATTRIBUTE_NOT_FOUND, attributeName);
+            return 0;
+        }
     }
     
     /**
@@ -549,6 +687,8 @@ public class AttributeCommands {
         sendInfoMessage(context, MSG_HELP_POINTS);
         sendInfoMessage(context, MSG_HELP_ADD_POINTS);
         sendInfoMessage(context, MSG_HELP_MAX);
+        sendInfoMessage(context, MSG_HELP_MAX_INCREASE);
+        sendInfoMessage(context, MSG_HELP_MAX_DECREASE);
         sendInfoMessage(context, MSG_HELP_LIST);
         
         return 1;
@@ -603,23 +743,30 @@ public class AttributeCommands {
      * 发送成功消息
      */
     private static void sendSuccessMessage(CommandContext<ServerCommandSource> context, String format, Object... args) {
-        context.getSource().sendFeedback(() -> 
-                Text.translatable(format, args).formatted(Formatting.GREEN), false);
+        // 不向玩家发送消息
+        if (JustDying.getConfig().debug) {
+            JustDying.LOGGER.debug("成功: " + String.format(format, args));
+        }
     }
     
     /**
      * 发送错误消息
      */
     private static void sendErrorMessage(CommandContext<ServerCommandSource> context, String format, Object... args) {
-        context.getSource().sendError(Text.translatable(format, args).formatted(Formatting.RED));
+        // 不向玩家发送消息
+        if (JustDying.getConfig().debug) {
+            JustDying.LOGGER.debug("错误: " + String.format(format, args));
+        }
     }
     
     /**
      * 发送信息消息
      */
     private static void sendInfoMessage(CommandContext<ServerCommandSource> context, String format, Object... args) {
-        context.getSource().sendFeedback(() -> 
-                Text.translatable(format, args).formatted(Formatting.AQUA), false);
+        // 不向玩家发送消息
+        if (JustDying.getConfig().debug) {
+            JustDying.LOGGER.debug("信息: " + String.format(format, args));
+        }
     }
     
     /**
