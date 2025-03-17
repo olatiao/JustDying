@@ -1018,4 +1018,152 @@ public class SorcererBossEntity extends BaseBossEntity implements GeoAnimatable 
             }
         }
     }
+
+    // 覆盖碰撞箱计算方法，完全自定义碰撞箱形状
+    // getBoundingBox是final方法无法覆盖，改为修改其他相关方法
+    
+    // 控制实体维度来影响碰撞箱
+    @Override
+    public void calculateDimensions() {
+        // 在计算维度前重置姿势
+        this.setPitch(0);
+        
+        // 调用父类方法保持兼容性
+        super.calculateDimensions();
+        
+        // 确保在计算后实体的俯仰角仍然为0
+        this.setPitch(0);
+        this.prevPitch = 0;
+    }
+    
+    // 覆盖实体维度计算，确保始终使用直立的碰撞箱
+    @Override
+    public net.minecraft.entity.EntityDimensions getDimensions(net.minecraft.entity.EntityPose pose) {
+        // 忽略传入的姿势参数，始终返回固定的直立尺寸
+        return net.minecraft.entity.EntityDimensions.fixed(0.6f, 1.95f);
+    }
+    
+    // 完全控制实体状态
+    @Override
+    public void checkDespawn() {
+        // 防止实体自然消失
+        if (this.getWorld().getDifficulty() == net.minecraft.world.Difficulty.PEACEFUL) {
+            this.discard();
+            return;
+        }
+        
+        // 不执行原版的消失逻辑，确保BOSS不会自然消失
+    }
+    
+    // 禁用所有可能导致实体倒地的运动
+    @Override
+    protected void applyDamage(net.minecraft.entity.damage.DamageSource source, float amount) {
+        // 在受伤前保存朝向
+        float originalYaw = this.getYaw();
+        
+        // 执行正常的伤害逻辑
+        super.applyDamage(source, amount);
+        
+        // 恢复朝向，确保受伤不会改变实体朝向
+        this.setYaw(originalYaw);
+        this.bodyYaw = originalYaw;
+        this.prevBodyYaw = originalYaw;
+        this.headYaw = originalYaw;
+        this.prevHeadYaw = originalYaw;
+        
+        // 重置俯仰角
+        this.setPitch(0);
+        this.prevPitch = 0;
+    }
+    
+    // 自定义实体移动方法，而不是覆盖默认实现
+    @Override
+    public void move(net.minecraft.entity.MovementType movementType, Vec3d movement) {
+        // 保留原始yaw值
+        float originalYaw = this.getYaw();
+        
+        // 处理垂直移动
+        if (movement.y != 0 && !this.isOnGround()) {
+            // 如果是下落（负垂直速度），尝试找到地面
+            if (movement.y < 0) {
+                Vec3d pos = this.getPos();
+                int safeY = findSafeY(this.getWorld(), pos.x, pos.z);
+                if (safeY > 0) {
+                    // 如果找到地面，直接将实体设置到地面上
+                    this.refreshPositionAndAngles(pos.x, safeY, pos.z, originalYaw, 0);
+                    this.setVelocity(Vec3d.ZERO);
+                    return; // 跳过默认的移动处理
+                }
+            }
+            
+            // 如果无法直接回到地面，只使用水平移动分量
+            super.move(movementType, new Vec3d(movement.x, 0, movement.z));
+        } else {
+            // 正常情况下，只使用水平移动分量
+            super.move(movementType, new Vec3d(movement.x, 0, movement.z));
+        }
+        
+        // 在移动后强制重置姿势
+        this.setPitch(0);
+        this.prevPitch = 0;
+        this.setYaw(originalYaw);
+        this.bodyYaw = this.headYaw;
+        this.prevBodyYaw = this.bodyYaw;
+    }
+    
+    // 完全控制实体位置和朝向更新
+    @Override
+    public void updatePositionAndAngles(double x, double y, double z, float yaw, float pitch) {
+        // 更新位置时忽略pitch值，始终使用0
+        super.updatePositionAndAngles(x, y, z, yaw, 0);
+    }
+    
+    // 确保实体总是处于非投射状态
+    @Override
+    public boolean isPushable() {
+        return false; // 防止其他实体推动此实体
+    }
+    
+    @Override
+    public boolean isPushedByFluids() {
+        return false; // 防止流体推动此实体
+    }
+    
+    // 禁用实体的所有默认物理受力逻辑
+    @Override
+    public void takeKnockback(double strength, double x, double z) {
+        // 完全禁用击退效果
+    }
+    
+    // 防止任何形式的旋转
+    @Override
+    public void changeLookDirection(double x, double z) {
+        // 保存当前朝向
+        float oldYaw = this.getYaw();
+        
+        // 应用正常的朝向变化逻辑
+        super.changeLookDirection(x, z);
+        
+        // 确保pitch始终为0
+        this.setPitch(0);
+        this.prevPitch = 0;
+        
+        // 同步所有朝向相关的变量
+        this.bodyYaw = this.headYaw;
+        this.prevBodyYaw = this.bodyYaw;
+    }
+    
+    // 完全禁用转向动画和相关计算
+    @Override
+    protected float getActiveEyeHeight(net.minecraft.entity.EntityPose pose, net.minecraft.entity.EntityDimensions dimensions) {
+        // 忽略传入的姿势，始终返回标准站立时的眼睛高度
+        return 1.7f; // 略低于实体总高度
+    }
+    
+    // 提供跟随逻辑的回退方案
+    @Override
+    public Vec3d getLeashOffset() {
+        // 确保缰绳连接点保持在合理位置
+        return new Vec3d(0, 1.2, 0);
+    }
 }
