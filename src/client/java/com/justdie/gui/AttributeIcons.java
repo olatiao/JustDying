@@ -4,7 +4,6 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.util.Identifier;
 import net.minecraft.item.Items;
 import net.minecraft.item.ItemStack;
-import com.justdie.JustDying;
 import com.justdie.attribute.JustDyingAttributeType;
 
 /**

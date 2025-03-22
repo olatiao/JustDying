@@ -13,7 +13,7 @@ import org.lwjgl.glfw.GLFW;
  */
 public class AttributeKeybinding {
     private static KeyBinding attributeKey;
-    
+
     /**
      * 注册按键绑定
      */
@@ -23,17 +23,16 @@ public class AttributeKeybinding {
                 "key." + JustDying.MOD_ID + ".open_attributes",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_K,
-                "category." + JustDying.MOD_ID + ".general"
-        ));
-        
+                "category." + JustDying.MOD_ID + ".general"));
+
         // 注册按键事件
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (attributeKey.wasPressed()) {
+            while (attributeKey.wasPressed()) {
                 openAttributeScreen(client);
             }
         });
     }
-    
+
     /**
      * 打开属性面板
      * 
@@ -44,4 +43,4 @@ public class AttributeKeybinding {
             client.setScreen(new AttributeScreen(client.player));
         }
     }
-} 
+}
