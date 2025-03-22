@@ -8,17 +8,28 @@ import com.justdie.attribute.JustDyingAttributeType;
 import com.justdie.network.ClientAttributePackets;
 import com.justdie.attribute.LevelExchangeManager;
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.item.ItemStack;
-import net.minecraft.client.gui.Element;
+import net.minecraft.client.render.Tessellator;
+import net.minecraft.client.render.BufferBuilder;
+import com.mojang.blaze3d.systems.RenderSystem;
+import net.minecraft.util.math.Vec2f;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.render.VertexFormat;
+import net.minecraft.client.render.VertexFormats;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.joml.Vector4f;
+
 import java.util.Map;
 import java.util.Objects;
 import java.util.Comparator;
@@ -29,43 +40,40 @@ import java.util.Comparator;
  */
 public class AttributeScreen extends Screen {
     // GUI常量
-    private static final int PADDING = 10;
-    private static final int ATTRIBUTE_HEIGHT = 26;
-    private static final int BUTTON_WIDTH = 20;
-    private static final int BUTTON_HEIGHT = 20;
-    private static final int BUTTON_SPACING = 5; // 按钮之间的间距
-    // 增加面板宽度，解决中文字符被遮挡问题
-    private static final int GUI_WIDTH = 260; // 从200增加到260
-    private static final int GUI_HEIGHT = 240; // 标准高度
-    private static final int GUI_HEIGHT_COMPACT = 200; // 紧凑高度（无翻页按钮）
-    private static final int GUI_HEIGHT_NO_EXCHANGE = 210; // 无等级兑换按钮高度
-    private static final int GUI_HEIGHT_COMPACT_NO_EXCHANGE = 180; // 紧凑且无等级兑换按钮高度
-    private static final int BUTTON_AREA_TOP_MARGIN = 20; // 按钮区域顶部间距
+    private final Vector4f lineColor = new Vector4f(1f, .85f, .7f, 1f);
+    private final Vector4f radialButtonColor = new Vector4f(.04f, .03f, .01f, .6f);
+    private final Vector4f highlightColor = new Vector4f(.8f, .7f, .55f, .7f);
+    private final Vector4f textColor = new Vector4f(1f, 1f, 1f, 1f);
+
+    private final double ringInnerEdge = 20;
+    private double ringOuterEdge = 80;
+    private final double ringOuterEdgeMax = 80;
+    private final double ringOuterEdgeMin = 65;
 
     // 页面控制变量
     private final PlayerEntity player;
     private final List<JustDyingAttribute> attributes;
-    private int scrollOffset = 0;
     private int availablePoints = 0; // 可用点数
     private int requiredLevel = 0; // 所需等级
-    private int actualGuiHeight; // 动态计算的GUI高度
 
     // 预缓存的物品图标堆栈
     private final Map<String, ItemStack> itemStackCache = new ConcurrentHashMap<>();
 
-    // 翻页按钮
-    private ButtonWidget upButton;
-    private ButtonWidget downButton;
-    // 等级兑换按钮
-    private ButtonWidget exchangeButton;
+    private final boolean enableLevelExchange = JustDying.getConfig().levelExchange.enableLevelExchange;
 
-    // 渲染缓存
-    private int lastWidth = 0;
-    private int lastHeight = 0;
-    private int cachedCenterX = 0;
-    private int cachedCenterY = 0;
-    private int cachedLeft = 0;
-    private int cachedTop = 0;
+    private int wheelSelection = -1;
+    private JustDyingAttribute selectedAttribute = null;
+    private boolean isLevelExchangeSelected = false;
+
+    // 按钮区域的常量
+    private static final int BUTTON_WIDTH = 20;
+    private static final int BUTTON_HEIGHT = 20;
+    private static final int BUTTON_SPACING = 5;
+
+    // 增减按钮
+    private ButtonWidget increaseButton;
+    private ButtonWidget decreaseButton;
+    private ButtonWidget exchangeButton;
 
     /**
      * 创建属性面板
@@ -90,27 +98,6 @@ public class AttributeScreen extends Screen {
 
         // 打开面板时请求服务器同步最新数据
         requestDataSync();
-        
-        // 计算实际GUI高度
-        updateGUIHeight();
-    }
-
-    /**
-     * 根据当前配置和属性数量动态更新GUI高度
-     */
-    private void updateGUIHeight() {
-        boolean needsPagination = attributes.size() > getVisibleAttributeCount();
-        boolean enableLevelExchange = JustDying.getConfig().levelExchange.enableLevelExchange;
-        
-        if (needsPagination && enableLevelExchange) {
-            actualGuiHeight = GUI_HEIGHT; // 标准高度
-        } else if (needsPagination && !enableLevelExchange) {
-            actualGuiHeight = GUI_HEIGHT_NO_EXCHANGE; // 无等级兑换按钮高度
-        } else if (!needsPagination && enableLevelExchange) {
-            actualGuiHeight = GUI_HEIGHT_COMPACT; // 紧凑高度
-        } else {
-            actualGuiHeight = GUI_HEIGHT_COMPACT_NO_EXCHANGE; // 紧凑且无等级兑换按钮高度
-        }
     }
 
     /**
@@ -129,145 +116,97 @@ public class AttributeScreen extends Screen {
     protected void init() {
         super.init();
 
-        // 更新页面布局缓存
-        updateLayoutCache();
-
         // 更新数据
         this.availablePoints = AttributeHelper.getAvailablePoints(player);
         if (JustDying.getConfig().levelExchange.enableLevelExchange) {
             this.requiredLevel = LevelExchangeManager.calculateRequiredLevel(player);
         }
-        
-        // 更新GUI高度
-        updateGUIHeight();
+
+        // 添加按钮，但初始时设为不可见
+        addButtons();
+        updateButtonVisibility();
 
         JustDying.LOGGER.debug("初始化属性面板 - 可用点数: {}, 所需等级: {}", availablePoints, requiredLevel);
-
-        // 添加控制按钮
-        addButtons();
-    }
-
-    /**
-     * 更新页面布局缓存
-     */
-    private void updateLayoutCache() {
-        if (width != lastWidth || height != lastHeight) {
-            cachedCenterX = width / 2;
-            cachedCenterY = height / 2;
-            cachedLeft = cachedCenterX - GUI_WIDTH / 2;
-            cachedTop = cachedCenterY - actualGuiHeight / 2;
-
-            lastWidth = width;
-            lastHeight = height;
-        }
     }
 
     /**
      * 添加控制按钮
      */
     private void addButtons() {
-        // 清除旧按钮
-        resetButtons();
-        
-        // 只有当需要分页时才添加翻页按钮
-        if (attributes.size() > getVisibleAttributeCount()) {
-            // 添加翻页按钮 - 移到面板左下角
-            int buttonY = cachedTop + actualGuiHeight - 30;
-            
-            // 上翻按钮
-            upButton = this.addDrawableChild(new AttributeButton(
-                    cachedLeft + PADDING,
-                    buttonY,
-                    BUTTON_WIDTH, BUTTON_HEIGHT,
-                    Text.literal("↑"),
-                    button -> scrollUp()));
-    
-            // 下翻按钮
-            downButton = this.addDrawableChild(new AttributeButton(
-                    cachedLeft + PADDING + BUTTON_WIDTH + BUTTON_SPACING,
-                    buttonY,
-                    BUTTON_WIDTH, BUTTON_HEIGHT,
-                    Text.literal("↓"),
-                    button -> scrollDown()));
+        int centerX = this.width / 2;
+        int centerY = this.height / 2;
+
+        // 增加按钮
+        increaseButton = this.addDrawableChild(new ButtonWidget.Builder(
+                Text.literal("+"),
+                button -> {
+                    if (selectedAttribute != null) {
+                        increaseAttribute(selectedAttribute);
+                    }
+                })
+                .position(centerX + 100, centerY - BUTTON_HEIGHT / 2)
+                .size(BUTTON_WIDTH, BUTTON_HEIGHT)
+                .build());
+
+        // 减少按钮 - 仅当配置允许时显示
+        if (JustDying.getConfig().attributes.showDecreaseButtons) {
+            decreaseButton = this.addDrawableChild(new ButtonWidget.Builder(
+                    Text.literal("-"),
+                    button -> {
+                        if (selectedAttribute != null) {
+                            decreaseAttribute(selectedAttribute);
+                        }
+                    })
+                    .position(centerX + 100 + BUTTON_WIDTH + BUTTON_SPACING, centerY - BUTTON_HEIGHT / 2)
+                    .size(BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build());
         }
 
-        // 添加等级兑换按钮 - 如果启用了等级兑换
+        // 等级兑换按钮
         if (JustDying.getConfig().levelExchange.enableLevelExchange) {
-            int exchangeButtonY = cachedTop + actualGuiHeight - 60;
             Text buttonText = Text.translatable("gui.justdying.exchange_level", this.requiredLevel);
-            exchangeButton = this.addDrawableChild(new AttributeButton(
-                    cachedCenterX - 80,
-                    exchangeButtonY,
-                    160, BUTTON_HEIGHT,
+            exchangeButton = this.addDrawableChild(new ButtonWidget.Builder(
                     buttonText,
-                    button -> exchangeLevelForPoint()));
+                    button -> exchangeLevelForPoint())
+                    .position(centerX - 80, centerY + 100)
+                    .size(160, BUTTON_HEIGHT)
+                    .build());
         }
 
-        // 为每个可见的属性添加增减按钮
-        addAttributeButtons();
-
-        // 更新按钮状态
-        updateButtonStates();
+        // 初始状态下隐藏所有按钮
+        updateButtonVisibility();
     }
 
     /**
-     * 为每个属性添加增减按钮
+     * 更新按钮可见性
      */
-    private void addAttributeButtons() {
-        int start = scrollOffset;
-        int end = Math.min(scrollOffset + getVisibleAttributeCount(), attributes.size());
-        int visibleCount = end - start;
+    private void updateButtonVisibility() {
+        // 默认隐藏所有按钮
+        boolean showAttributeButtons = selectedAttribute != null && !isLevelExchangeSelected;
+        boolean showExchangeButton = isLevelExchangeSelected;
 
-        for (int i = 0; i < visibleCount; i++) {
-            final int index = start + i;
-            JustDyingAttribute attribute = attributes.get(index);
-            int attributeY = cachedTop + 40 + i * ATTRIBUTE_HEIGHT;
-
-            // 增加按钮
-            ButtonWidget increaseButton = this.addDrawableChild(new AttributeButton(
-                    cachedLeft + GUI_WIDTH - PADDING - BUTTON_WIDTH * 2 - BUTTON_SPACING,
-                    attributeY,
-                    BUTTON_WIDTH, BUTTON_HEIGHT,
-                    Text.literal("+"),
-                    button -> increaseAttribute(attribute)));
-
-            // 减少按钮 - 仅当配置允许时显示
-            if (JustDying.getConfig().attributes.showDecreaseButtons) {
-                ButtonWidget decreaseButton = this.addDrawableChild(new AttributeButton(
-                        cachedLeft + GUI_WIDTH - PADDING - BUTTON_WIDTH,
-                        attributeY,
-                        BUTTON_WIDTH, BUTTON_HEIGHT,
-                        Text.literal("-"),
-                        button -> decreaseAttribute(attribute)));
-            }
-        }
-    }
-
-    /**
-     * 更新按钮状态
-     */
-    private void updateButtonStates() {
-        // 只有当按钮存在时才更新其状态
-        if (upButton != null && downButton != null) {
-            // 更新翻页按钮状态
-            upButton.active = scrollOffset > 0;
-            downButton.active = scrollOffset + getVisibleAttributeCount() < attributes.size();
-        }
-
-        // 更新增减按钮状态 - 遍历所有子元素
-        for (Element element : this.children()) {
-            if (element instanceof ButtonWidget) {
-                ButtonWidget button = (ButtonWidget) element;
-                // 根据按钮文本判断类型
-                if (button.getMessage().getString().equals("+")) {
-                    button.active = availablePoints > 0;
-                }
+        if (increaseButton != null) {
+            increaseButton.visible = showAttributeButtons;
+            if (showAttributeButtons) {
+                increaseButton.active = availablePoints > 0 &&
+                        AttributeHelper.getAttributeValue(player, selectedAttribute.getId()) < selectedAttribute
+                                .getMaxValue();
             }
         }
 
-        // 更新等级兑换按钮状态
+        if (decreaseButton != null) {
+            decreaseButton.visible = showAttributeButtons && JustDying.getConfig().attributes.showDecreaseButtons;
+            if (showAttributeButtons) {
+                decreaseButton.active = AttributeHelper.getAttributeValue(player,
+                        selectedAttribute.getId()) > selectedAttribute.getMinValue();
+            }
+        }
+
         if (exchangeButton != null) {
-            exchangeButton.active = player.experienceLevel >= requiredLevel;
+            exchangeButton.visible = showExchangeButton;
+            if (showExchangeButton) {
+                exchangeButton.active = player.experienceLevel >= requiredLevel;
+            }
         }
     }
 
@@ -282,80 +221,174 @@ public class AttributeScreen extends Screen {
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         // 绘制默认的深色背景
         this.renderBackground(context);
+        MatrixStack matrices = context.getMatrices();
 
-        // 更新页面布局缓存
-        updateLayoutCache();
-        
-        // 绘制面板背景
-        context.fillGradient(cachedLeft, cachedTop, cachedLeft + GUI_WIDTH, cachedTop + actualGuiHeight,
-                0xC0101010, 0xD0101010);
-        context.drawBorder(cachedLeft, cachedTop, GUI_WIDTH, actualGuiHeight, 0xFF000000);
+        // 判断可用属性数量
+        int visibleCount = attributes.size();
+        if (enableLevelExchange) {
+            visibleCount += 1;
+        }
 
-        // 绘制标题
-        context.drawCenteredTextWithShadow(textRenderer, this.title, cachedCenterX, cachedTop + 10, 0xFFFFFF);
+        int centerX = this.width / 2;
+        int centerY = this.height / 2;
+
+        Vec2f screenCenter = new Vec2f(this.width / 2f, this.height / 2f);
+        Vec2f mousePos = new Vec2f(mouseX, mouseY);
+        double radiansPerSpell = Math.toRadians(360.0 / visibleCount);
+
+        float mouseRotation = (getAngle(mousePos, screenCenter) + 1.570f + (float) radiansPerSpell * .5f) % 6.283f;
+
+        int oldWheelSelection = wheelSelection;
+        wheelSelection = (int) MathHelper.clamp(mouseRotation / radiansPerSpell, 0, visibleCount - 1);
+        double mouseDistance = mousePos.distanceSquared(screenCenter);
+
+        // 只有在轮盘范围内才进行选择
+        if (mouseDistance < ringOuterEdge * ringOuterEdge && mouseDistance > ringInnerEdge * ringInnerEdge) {
+            if (wheelSelection < attributes.size()) {
+                selectedAttribute = attributes.get(wheelSelection);
+                isLevelExchangeSelected = false;
+            } else {
+                // 选择了等级兑换
+                selectedAttribute = null;
+                isLevelExchangeSelected = true;
+            }
+        } else if (mouseDistance <= ringInnerEdge * ringInnerEdge) {
+            // 在中心区域清除选择
+            wheelSelection = -1;
+            selectedAttribute = null;
+            isLevelExchangeSelected = false;
+        }
+
+        // 如果选择变化了，更新按钮状态
+        if (oldWheelSelection != wheelSelection) {
+            updateButtonVisibility();
+        }
+
+        // 开始渲染轮盘
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+
+        Tessellator tessellator = Tessellator.getInstance();
+        BufferBuilder buffer = tessellator.getBuffer();
+
+        // 渲染轮盘背景
+        drawRadialBackgrounds(buffer, centerX, centerY, wheelSelection, radiansPerSpell, visibleCount);
+        drawDividingLines(buffer, centerX, centerY, radiansPerSpell, visibleCount);
+
+        tessellator.draw();
+
+        // 绘制属性图标和名称
+        for (int i = 0; i < visibleCount; i++) {
+            double angle = i * radiansPerSpell - (Math.PI / 2);
+            double radius = (ringInnerEdge + ringOuterEdge) / 2;
+
+            double iconX = centerX + Math.cos(angle) * radius;
+            double iconY = centerY + Math.sin(angle) * radius;
+
+            if (i < attributes.size()) {
+                // 渲染属性图标
+                JustDyingAttribute attr = attributes.get(i);
+                renderAttributeIcon(context, attr, (int) iconX - 8, (int) iconY - 8);
+
+                // 如果被选中，渲染属性名称和值
+                if (i == wheelSelection) {
+                    renderSelectedAttributeInfo(context, attr, centerX, centerY, mouseX, mouseY);
+                }
+            } else {
+                // 渲染等级兑换图标
+                ItemStack exchangeIcon = AttributeIcons.getLevelExchangeIcon();
+                context.drawItem(exchangeIcon, (int) iconX - 8, (int) iconY - 8);
+
+                // 如果被选中，渲染等级兑换信息
+                if (i == wheelSelection) {
+                    renderLevelExchangeInfo(context, centerX, centerY);
+                }
+            }
+        }
 
         // 绘制可用点数
         Text pointsText = Text.translatable("gui." + JustDying.MOD_ID + ".available_points", this.availablePoints);
-        context.drawTextWithShadow(textRenderer, pointsText, cachedLeft + PADDING, cachedTop + 25, 0xFFFFFF);
+        context.drawTextWithShadow(this.textRenderer, pointsText,
+                10, 10, 0xFFFFFF);
 
-        // 如果启用了等级兑换功能，显示当前等级和所需等级
-        if (JustDying.getConfig().levelExchange.enableLevelExchange) {
-            String levelText = Text.translatable("gui." + JustDying.MOD_ID + ".current_level", player.experienceLevel)
-                    .getString();
-            context.drawTextWithShadow(textRenderer, levelText,
-                    cachedLeft + GUI_WIDTH - PADDING - textRenderer.getWidth(levelText), cachedTop + 25, 0xFFFFFF);
+        // 绘制当前等级
+        if (enableLevelExchange) {
+            Text levelText = Text.translatable("gui." + JustDying.MOD_ID + ".current_level", player.experienceLevel);
+            context.drawTextWithShadow(this.textRenderer, levelText,
+                    10, 25, 0xFFFFFF);
         }
 
-        // 绘制属性列表
-        renderAttributeList(context, mouseX, mouseY);
-
-        // 绘制分页信息 - 右下角
-        if (attributes.size() > getVisibleAttributeCount()) {
-            int maxPage = (int) Math.ceil((double) attributes.size() / getVisibleAttributeCount());
-            int currentPage = (scrollOffset / getVisibleAttributeCount()) + 1;
-            String pageInfo = currentPage + "/" + maxPage;
-            // 右下角位置
-            context.drawTextWithShadow(textRenderer, pageInfo, 
-                    cachedLeft + GUI_WIDTH - PADDING - textRenderer.getWidth(pageInfo), 
-                    cachedTop + actualGuiHeight - 15, 0xAAAAAA);
-        }
-
+        // 确保调用父类的render方法，这样按钮才会被正确渲染
         super.render(context, mouseX, mouseY, delta);
     }
 
     /**
-     * 渲染属性列表
+     * 渲染选中的属性信息
      */
-    private void renderAttributeList(DrawContext context, int mouseX, int mouseY) {
-        // 计算当前页显示的属性范围
-        int start = scrollOffset;
-        int end = Math.min(scrollOffset + getVisibleAttributeCount(), attributes.size());
-        int visibleCount = end - start;
+    private void renderSelectedAttributeInfo(DrawContext context, JustDyingAttribute attribute,
+            int centerX, int centerY, int mouseX, int mouseY) {
+        int value = AttributeHelper.getAttributeValue(player, attribute.getId());
 
-        for (int i = 0; i < visibleCount; i++) {
-            int index = start + i;
-            JustDyingAttribute attribute = attributes.get(index);
-            int attributeY = cachedTop + 40 + i * ATTRIBUTE_HEIGHT;
+        // 绘制属性名称
+        Text nameText = attribute.getName();
+        context.drawCenteredTextWithShadow(this.textRenderer, nameText,
+                centerX, centerY - 50, 0xFFFFFF);
 
-            // 渲染属性图标
-            renderAttributeIcon(context, attribute, cachedLeft + PADDING, attributeY);
+        // 绘制属性值
+        Text valueText = Text.literal(value + "/" + attribute.getMaxValue());
+        context.drawCenteredTextWithShadow(this.textRenderer, valueText,
+                centerX, centerY - 35, 0xFFFFFF);
 
-            // 绘制属性名称 - 添加更多空间
-            context.drawTextWithShadow(textRenderer, attribute.getName(),
-                    cachedLeft + PADDING + 24, attributeY + 5, 0xFFFFFF);
+        // 如果属性有描述，绘制描述
+        if (attribute.getDescription() != null) {
+            Text descText = attribute.getDescription();
+            int descWidth = Math.min(200, this.textRenderer.getWidth(descText) + 10);
 
-            // 绘制属性值 - 调整位置以适应更宽的面板
-            int value = AttributeHelper.getAttributeValue(player, attribute.getId());
-            String valueText = value + "/" + attribute.getMaxValue();
-            context.drawTextWithShadow(textRenderer, valueText,
-                    cachedLeft + GUI_WIDTH - PADDING - 50 - textRenderer.getWidth(valueText),
-                    attributeY + 5, 0xFFFFFF);
+            drawTextBackground(context.getMatrices(), centerX, centerY, 10, descWidth, 20);
 
-            // 如果鼠标悬停在属性上，显示属性的详细信息
-            if (isMouseOverAttribute(mouseX, mouseY, attributeY)) {
-                renderAttributeTooltip(context, mouseX, mouseY, attribute, value);
-            }
+            context.drawCenteredTextWithShadow(this.textRenderer, descText,
+                    centerX, centerY - 10, 0xBBBBBB);
         }
+
+        // 如果属性关联原版属性，显示加成数值
+        if (attribute.getVanillaAttribute() != null) {
+            double bonus = attribute.calculateAttributeBonus(value);
+            Text bonusText = Text.literal("+" + String.format("%.2f", bonus) + " " +
+                    attribute.getVanillaAttribute().getTranslationKey())
+                    .formatted(Formatting.BLUE);
+
+            context.drawCenteredTextWithShadow(this.textRenderer, bonusText,
+                    centerX, centerY + 10, 0x55FFFF);
+        }
+    }
+
+    /**
+     * 渲染等级兑换信息
+     */
+    private void renderLevelExchangeInfo(DrawContext context, int centerX, int centerY) {
+        // 绘制等级兑换标题
+        Text titleText = Text.translatable("gui." + JustDying.MOD_ID + ".level_exchange");
+        context.drawCenteredTextWithShadow(this.textRenderer, titleText,
+                centerX, centerY - 50, 0xFFFFFF);
+
+        // 绘制所需等级
+        Text reqText = Text.translatable("gui." + JustDying.MOD_ID + ".required_level", this.requiredLevel);
+        context.drawCenteredTextWithShadow(this.textRenderer, reqText,
+                centerX, centerY - 35, 0xFFFFFF);
+
+        // 绘制当前等级
+        Text curLevelText = Text.translatable("gui." + JustDying.MOD_ID + ".current_level", player.experienceLevel);
+        context.drawCenteredTextWithShadow(this.textRenderer, curLevelText,
+                centerX, centerY - 20, player.experienceLevel >= requiredLevel ? 0x55FF55 : 0xFF5555);
+
+        // 绘制描述
+        Text descText = Text.translatable("gui." + JustDying.MOD_ID + ".exchange_description");
+        int descWidth = Math.min(200, this.textRenderer.getWidth(descText) + 10);
+
+        drawTextBackground(context.getMatrices(), centerX, centerY, -5, descWidth, 20);
+
+        context.drawCenteredTextWithShadow(this.textRenderer, descText,
+                centerX, centerY + 5, 0xBBBBBB);
     }
 
     /**
@@ -383,86 +416,10 @@ public class AttributeScreen extends Screen {
     }
 
     /**
-     * 检查鼠标是否悬停在属性上
-     */
-    private boolean isMouseOverAttribute(int mouseX, int mouseY, int attributeY) {
-        return mouseX >= cachedLeft + PADDING && mouseX <= cachedLeft + GUI_WIDTH - PADDING - 50 &&
-                mouseY >= attributeY && mouseY <= attributeY + ATTRIBUTE_HEIGHT;
-    }
-
-    /**
-     * 渲染属性工具提示
-     */
-    private void renderAttributeTooltip(DrawContext context, int mouseX, int mouseY,
-            JustDyingAttribute attribute, int value) {
-        List<Text> tooltip = new ArrayList<>();
-        tooltip.add(attribute.getName());
-        tooltip.add(Text.literal("").append(attribute.getDescription()).formatted(Formatting.GRAY));
-
-        // 排序值信息（调试用）
-        String attributePath = attribute.getId().getPath();
-        int sortOrder = 0;
-        if (JustDying.getConfig().attributes.attributes.containsKey(attributePath)) {
-            sortOrder = JustDying.getConfig().attributes.attributes.get(attributePath).sortOrder;
-        }
-        tooltip.add(Text.literal("排序值: " + sortOrder).formatted(Formatting.DARK_GRAY));
-
-        // 如果属性关联原版属性，显示加成数值
-        if (attribute.getVanillaAttribute() != null) {
-            double bonus = attribute.calculateAttributeBonus(value);
-            tooltip.add(Text.literal("+" + String.format("%.2f", bonus) + " " +
-                    attribute.getVanillaAttribute().getTranslationKey())
-                    .formatted(Formatting.BLUE));
-        }
-
-        context.drawTooltip(textRenderer, tooltip, mouseX, mouseY);
-    }
-
-    /**
-     * 获取一页可显示的属性数量
-     */
-    private int getVisibleAttributeCount() {
-        // 根据界面高度计算可见的属性数量
-        return 5; // 设置为固定值，确保一致的布局
-    }
-
-    /**
-     * 向上翻页
-     */
-    private void scrollUp() {
-        if (scrollOffset > 0) {
-            scrollOffset -= getVisibleAttributeCount();
-            if (scrollOffset < 0) {
-                scrollOffset = 0;
-            }
-            resetButtons();
-            addButtons();
-            updateButtonStates();
-        }
-    }
-
-    /**
-     * 向下翻页
-     */
-    private void scrollDown() {
-        // 计算最大翻页偏移量
-        int maxOffset = ((attributes.size() - 1) / getVisibleAttributeCount()) * getVisibleAttributeCount();
-        if (scrollOffset < maxOffset) {
-            scrollOffset += getVisibleAttributeCount();
-            if (scrollOffset > maxOffset) {
-                scrollOffset = maxOffset;
-            }
-            resetButtons();
-            addButtons();
-            updateButtonStates();
-        }
-    }
-
-    /**
      * 尝试使用等级兑换属性点
      */
     private void exchangeLevelForPoint() {
-        if (JustDying.getConfig().levelExchange.enableLevelExchange) {
+        if (JustDying.getConfig().levelExchange.enableLevelExchange && player.experienceLevel >= requiredLevel) {
             ClientAttributePackets.sendExchangeLevelPacket();
         }
     }
@@ -481,8 +438,8 @@ public class AttributeScreen extends Screen {
             AttributeHelper.addPoints(player, 1);
             this.availablePoints = AttributeHelper.getAvailablePoints(player);
 
-            // 刷新界面
-            updateButtonStates();
+            // 更新按钮状态
+            updateButtonVisibility();
         }
     }
 
@@ -501,10 +458,37 @@ public class AttributeScreen extends Screen {
                 AttributeHelper.usePoints(player, 1);
                 this.availablePoints = AttributeHelper.getAvailablePoints(player);
 
-                // 刷新界面
-                updateButtonStates();
+                // 更新按钮状态
+                updateButtonVisibility();
             }
         }
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // 处理鼠标点击
+        Vec2f screenCenter = new Vec2f(this.width / 2f, this.height / 2f);
+        Vec2f mousePos = new Vec2f((float) mouseX, (float) mouseY);
+        double mouseDistance = mousePos.distanceSquared(screenCenter);
+
+        // 检查是否点击了轮盘中的某个选项
+        if (mouseDistance < ringOuterEdge * ringOuterEdge && mouseDistance > ringInnerEdge * ringInnerEdge) {
+            if (wheelSelection >= 0) {
+                if (wheelSelection < attributes.size()) {
+                    // 点击了属性
+                    selectedAttribute = attributes.get(wheelSelection);
+                    isLevelExchangeSelected = false;
+                } else {
+                    // 点击了等级兑换
+                    selectedAttribute = null;
+                    isLevelExchangeSelected = true;
+                }
+                updateButtonVisibility();
+                return true;
+            }
+        }
+
+        return super.mouseClicked(mouseX, mouseY, button);
     }
 
     /**
@@ -517,19 +501,137 @@ public class AttributeScreen extends Screen {
         if (JustDying.getConfig().levelExchange.enableLevelExchange) {
             this.requiredLevel = LevelExchangeManager.calculateRequiredLevel(player);
         }
-        
-        // 更新GUI高度
-        updateGUIHeight();
-        
-        // 更新布局缓存
-        updateLayoutCache();
 
-        // 重新初始化界面
-        resetButtons();
-        addButtons();
-        updateButtonStates();
+        // 更新按钮
+        updateButtonVisibility();
 
         JustDying.LOGGER.debug("属性面板已刷新 - 可用点数: {}", availablePoints);
+    }
+
+    private void drawRadialBackgrounds(BufferBuilder buffer, double centerX, double centerY,
+            int selectedSpellIndex, double radiansPerSpell, int totalSpells) {
+        RenderSystem.setShader(GameRenderer::getPositionColorProgram);
+        buffer.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
+
+        double quarterCircle = Math.PI / 2;
+        int segments;
+        if (totalSpells < 6) {
+            segments = totalSpells % 2 == 1 ? 15 : 12;
+        } else {
+            segments = totalSpells * 2;
+        }
+        double radiansPerObject = 2 * Math.PI / segments;
+        ringOuterEdge = Math.max(ringOuterEdgeMin, ringOuterEdgeMax);
+
+        for (int i = 0; i < segments; i++) {
+            final double beginRadians = i * radiansPerObject - (quarterCircle + (radiansPerSpell / 2));
+            final double endRadians = (i + 1) * radiansPerObject - (quarterCircle + (radiansPerSpell / 2));
+
+            final double x1m1 = Math.cos(beginRadians) * ringInnerEdge;
+            final double x2m1 = Math.cos(endRadians) * ringInnerEdge;
+            final double y1m1 = Math.sin(beginRadians) * ringInnerEdge;
+            final double y2m1 = Math.sin(endRadians) * ringInnerEdge;
+
+            final double x1m2 = Math.cos(beginRadians) * ringOuterEdge;
+            final double x2m2 = Math.cos(endRadians) * ringOuterEdge;
+            final double y1m2 = Math.sin(beginRadians) * ringOuterEdge;
+            final double y2m2 = Math.sin(endRadians) * ringOuterEdge;
+
+            boolean isHighlighted = (i * totalSpells) / segments == selectedSpellIndex;
+
+            Vector4f color = isHighlighted ? highlightColor : radialButtonColor;
+
+            buffer.vertex(centerX + x1m1, centerY + y1m1, 0).color(color.x, color.y, color.z, color.w).next();
+            buffer.vertex(centerX + x2m1, centerY + y2m1, 0).color(color.x, color.y, color.z, color.w).next();
+            buffer.vertex(centerX + x2m2, centerY + y2m2, 0).color(color.x, color.y, color.z, 0).next();
+            buffer.vertex(centerX + x1m2, centerY + y1m2, 0).color(color.x, color.y, color.z, 0).next();
+
+            // 分类线
+            color = lineColor;
+            double categoryLineWidth = 2;
+            final double categoryLineOuterEdge = ringInnerEdge + categoryLineWidth;
+
+            final double x1m3 = Math.cos(beginRadians) * categoryLineOuterEdge;
+            final double x2m3 = Math.cos(endRadians) * categoryLineOuterEdge;
+            final double y1m3 = Math.sin(beginRadians) * categoryLineOuterEdge;
+            final double y2m3 = Math.sin(endRadians) * categoryLineOuterEdge;
+
+            buffer.vertex(centerX + x1m1, centerY + y1m1, 0).color(color.x, color.y, color.z, color.w).next();
+            buffer.vertex(centerX + x2m1, centerY + y2m1, 0).color(color.x, color.y, color.z, color.w).next();
+            buffer.vertex(centerX + x2m3, centerY + y2m3, 0).color(color.x, color.y, color.z, color.w).next();
+            buffer.vertex(centerX + x1m3, centerY + y1m3, 0).color(color.x, color.y, color.z, color.w).next();
+        }
+    }
+
+    private void drawDividingLines(BufferBuilder buffer, double centerX, double centerY,
+            double radiansPerSpell, int totalSpells) {
+        if (totalSpells <= 1)
+            return;
+
+        double quarterCircle = Math.PI / 2;
+        ringOuterEdge = Math.max(ringOuterEdgeMin, ringOuterEdgeMax);
+
+        for (int i = 0; i < totalSpells; i++) {
+            final double closeWidth = 8 * Math.PI / 180; // 8度
+            final double farWidth = closeWidth / 4;
+            final double beginCloseRadians = i * radiansPerSpell - (quarterCircle + (radiansPerSpell / 2))
+                    - (closeWidth / 4);
+            final double endCloseRadians = beginCloseRadians + closeWidth;
+            final double beginFarRadians = i * radiansPerSpell - (quarterCircle + (radiansPerSpell / 2))
+                    - (farWidth / 4);
+            final double endFarRadians = beginCloseRadians + farWidth;
+
+            final double x1m1 = Math.cos(beginCloseRadians) * ringInnerEdge;
+            final double x2m1 = Math.cos(endCloseRadians) * ringInnerEdge;
+            final double y1m1 = Math.sin(beginCloseRadians) * ringInnerEdge;
+            final double y2m1 = Math.sin(endCloseRadians) * ringInnerEdge;
+
+            final double x1m2 = Math.cos(beginFarRadians) * ringOuterEdge * 1.4;
+            final double x2m2 = Math.cos(endFarRadians) * ringOuterEdge * 1.4;
+            final double y1m2 = Math.sin(beginFarRadians) * ringOuterEdge * 1.4;
+            final double y2m2 = Math.sin(endFarRadians) * ringOuterEdge * 1.4;
+
+            Vector4f color = lineColor;
+            buffer.vertex(centerX + x1m1, centerY + y1m1, 0).color(color.x, color.y, color.z, color.w).next();
+            buffer.vertex(centerX + x2m1, centerY + y2m1, 0).color(color.x, color.y, color.z, color.w).next();
+            buffer.vertex(centerX + x2m2, centerY + y2m2, 0).color(color.x, color.y, color.z, 0).next();
+            buffer.vertex(centerX + x1m2, centerY + y1m2, 0).color(color.x, color.y, color.z, 0).next();
+        }
+    }
+
+    private void drawTextBackground(MatrixStack matrices, double centerX, double centerY,
+            double textYOffset, int textWidth, int textHeight) {
+        Tessellator tessellator = Tessellator.getInstance();
+        BufferBuilder buffer = tessellator.getBuffer();
+
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.setShader(GameRenderer::getPositionColorProgram);
+        buffer.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
+
+        centerY = centerY + textYOffset;
+        int heightMax = textHeight / 2;
+        int heightMin = -heightMax;
+
+        int widthMax = textWidth / 2;
+        int widthMin = -widthMax;
+
+        buffer.vertex(centerX + widthMin, centerY + heightMin, 0)
+                .color(radialButtonColor.x, radialButtonColor.y, radialButtonColor.z, radialButtonColor.w).next();
+        buffer.vertex(centerX + widthMin, centerY + heightMax, 0)
+                .color(radialButtonColor.x, radialButtonColor.y, radialButtonColor.z, radialButtonColor.w).next();
+        buffer.vertex(centerX + widthMax, centerY + heightMax, 0)
+                .color(radialButtonColor.x, radialButtonColor.y, radialButtonColor.z, radialButtonColor.w).next();
+        buffer.vertex(centerX + widthMax, centerY + heightMin, 0)
+                .color(radialButtonColor.x, radialButtonColor.y, radialButtonColor.z, radialButtonColor.w).next();
+
+        tessellator.draw();
+        RenderSystem.disableBlend();
+    }
+
+    // 计算两点之间的角度
+    private float getAngle(Vec2f a, Vec2f b) {
+        return (float) Math.atan2(a.y - b.y, a.x - b.x);
     }
 
     @Override

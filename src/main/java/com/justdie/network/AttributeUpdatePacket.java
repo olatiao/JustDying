@@ -10,8 +10,6 @@ import net.minecraft.network.PacketByteBuf;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.Identifier;
 
-import java.util.Objects;
-
 /**
  * 服务端属性更新网络包处理器
  * 用于处理来自客户端的属性更新请求，包括属性增减、等级兑换和属性同步

@@ -2,6 +2,8 @@ package com.justdie.gui;
 
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.util.Identifier;
+import net.minecraft.item.Items;
+import net.minecraft.item.ItemStack;
 import com.justdie.JustDying;
 import com.justdie.attribute.JustDyingAttributeType;
 
@@ -10,14 +12,11 @@ import com.justdie.attribute.JustDyingAttributeType;
  * 用于在GUI中渲染不同属性的图标
  */
 public class AttributeIcons {
-    // 图标纹理路径
-    private static final Identifier TEXTURE = new Identifier(JustDying.MOD_ID, "textures/gui/attributes.png");
-
+    // 使用Minecraft原版纹理
+    public static final Identifier ICONS_TEXTURE = new Identifier("textures/gui/icons.png");
+    
     // 图标尺寸
     public static final int ICON_SIZE = 16;
-
-    // 纹理总宽度
-    private static final int TEXTURE_SIZE = 128;
 
     /**
      * 渲染属性图标（通过属性ID）
@@ -28,11 +27,9 @@ public class AttributeIcons {
      * @param y         Y坐标
      */
     public static void renderIcon(DrawContext context, String attributeId, int x, int y) {
-        int iconIndex = getIconIndex(attributeId);
-        int textureX = (iconIndex % (TEXTURE_SIZE / ICON_SIZE)) * ICON_SIZE;
-        int textureY = (iconIndex / (TEXTURE_SIZE / ICON_SIZE)) * ICON_SIZE;
-        
-        context.drawTexture(TEXTURE, x, y, textureX, textureY, ICON_SIZE, ICON_SIZE);
+        // 使用物品图标替代纹理图标
+        ItemStack itemStack = getIconItemForAttribute(attributeId);
+        context.drawItem(itemStack, x, y);
     }
     
     /**
@@ -44,46 +41,82 @@ public class AttributeIcons {
      * @param y            Y坐标
      */
     public static void renderIcon(DrawContext context, JustDyingAttributeType attributeType, int x, int y) {
-        int iconIndex = getIconIndex(attributeType);
-        int textureX = (iconIndex % (TEXTURE_SIZE / ICON_SIZE)) * ICON_SIZE;
-        int textureY = (iconIndex / (TEXTURE_SIZE / ICON_SIZE)) * ICON_SIZE;
-        
-        context.drawTexture(TEXTURE, x, y, textureX, textureY, ICON_SIZE, ICON_SIZE);
+        // 使用物品图标替代纹理图标
+        ItemStack itemStack = getIconItemForAttribute(attributeType);
+        context.drawItem(itemStack, x, y);
     }
 
     /**
-     * 获取属性图标的索引位置（通过属性ID）
+     * 获取属性对应的物品图标（通过属性ID）
      * 
      * @param attributeId 属性ID
-     * @return 图标的索引位置
+     * @return 代表该属性的物品堆栈
      */
-    private static int getIconIndex(String attributeId) {
-        // 使用哈希值来确定图标索引，确保相同的属性ID总是使用相同的图标
-        // 将哈希值限制在可用图标数量范围内（假设有8个基础图标）
-        return Math.abs(attributeId.hashCode() % 8);
+    private static ItemStack getIconItemForAttribute(String attributeId) {
+        // 使用哈希值来确定图标物品，确保相同的属性ID总是使用相同的图标
+        int iconIndex = Math.abs(attributeId.hashCode() % 8);
+        return getIconItemByIndex(iconIndex);
     }
     
     /**
-     * 获取属性图标的索引位置（通过属性类型枚举）
+     * 获取属性对应的物品图标（通过属性类型枚举）
      * 
      * @param attributeType 属性类型
-     * @return 图标的索引位置
+     * @return 代表该属性的物品堆栈
      */
-    private static int getIconIndex(JustDyingAttributeType attributeType) {
+    private static ItemStack getIconItemForAttribute(JustDyingAttributeType attributeType) {
         switch (attributeType) {
             case CONSTITUTION:
-                return 0;
+                return new ItemStack(Items.APPLE);
             case STRENGTH:
-                return 1;
+                return new ItemStack(Items.IRON_SWORD);
             case DEFENSE:
-                return 2;
+                return new ItemStack(Items.SHIELD);
             case SPEED:
-                return 3;
+                return new ItemStack(Items.FEATHER);
             case LUCK:
-                return 4;
+                return new ItemStack(Items.GOLD_INGOT);
             default:
-                // 对于未知的属性类型，返回一个默认索引
-                return 7;
+                // 对于未知的属性类型，返回一个默认物品
+                return new ItemStack(Items.BOOK);
         }
+    }
+    
+    /**
+     * 根据索引获取默认的物品图标
+     * 
+     * @param index 索引值 (0-7)
+     * @return 物品堆栈
+     */
+    private static ItemStack getIconItemByIndex(int index) {
+        switch (index) {
+            case 0:
+                return new ItemStack(Items.APPLE);
+            case 1:
+                return new ItemStack(Items.IRON_SWORD);
+            case 2:
+                return new ItemStack(Items.SHIELD);
+            case 3:
+                return new ItemStack(Items.FEATHER);
+            case 4:
+                return new ItemStack(Items.GOLD_INGOT);
+            case 5:
+                return new ItemStack(Items.POTION);
+            case 6:
+                return new ItemStack(Items.ENDER_PEARL);
+            case 7:
+                return new ItemStack(Items.EXPERIENCE_BOTTLE);
+            default:
+                return new ItemStack(Items.BOOK);
+        }
+    }
+    
+    /**
+     * 获取等级兑换图标
+     * 
+     * @return 代表等级兑换的物品堆栈
+     */
+    public static ItemStack getLevelExchangeIcon() {
+        return new ItemStack(Items.EXPERIENCE_BOTTLE);
     }
 }

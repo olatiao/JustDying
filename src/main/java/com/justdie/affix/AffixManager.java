@@ -14,11 +14,9 @@ import com.google.common.collect.Multimap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Random;
 import java.util.Map;
 import java.util.UUID;
 import java.util.HashMap;
-import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import net.minecraft.nbt.NbtCompound;
 
@@ -34,11 +32,6 @@ public class AffixManager {
     private static final String ITEM_TYPE_ARMOR = Affix.ITEM_TYPE_ARMOR;
     private static final String ITEM_TYPE_TOOL = Affix.ITEM_TYPE_TOOL;
     private static final String ITEM_TYPE_ANY = Affix.ITEM_TYPE_ANY;
-    
-    // 日志消息常量
-    private static final String LOG_AFFIX_APPLIED = "词缀已应用到物品: {}";
-    private static final String LOG_AFFIX_REMOVED = "词缀已从物品移除: {}";
-    private static final String LOG_INVALID_ITEM = "无效的物品，不适合添加词缀";
     
     /**
      * 初始化词缀系统
@@ -68,7 +61,6 @@ public class AffixManager {
         // 获取物品类型
         String itemType = getItemType(stack);
         if (itemType == null) {
-            JustDying.LOGGER.debug(LOG_INVALID_ITEM);
             return stack; // 不适合添加词缀的物品
         }
         
@@ -88,7 +80,6 @@ public class AffixManager {
             if (affix != null) {
                 affix.applyToItem(stack);
                 added++;
-                JustDying.LOGGER.debug(LOG_AFFIX_APPLIED, affix.getId());
             }
         }
         
@@ -182,7 +173,6 @@ public class AffixManager {
         // 获取物品类型
         String itemType = getItemType(stack);
         if (itemType == null) {
-            JustDying.LOGGER.debug(LOG_INVALID_ITEM);
             return stack; // 不适合添加词缀的物品
         }
         
