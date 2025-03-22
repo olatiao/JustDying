@@ -42,9 +42,30 @@ public class AttributeButton extends ButtonWidget {
         // 获取文本渲染器
         var textRenderer = MinecraftClient.getInstance().textRenderer;
         
-        // 绘制按钮文本
-        int textX = this.getX() + (this.getWidth() - textRenderer.getWidth(this.getMessage())) / 2;
-        int textY = this.getY() + (this.getHeight() - 8) / 2;
+        // 绘制按钮文本 - 针对不同大小的按钮进行调整
+        String text = this.getMessage().getString();
+        int textWidth = textRenderer.getWidth(this.getMessage());
+        
+        // 计算文本位置 - 根据按钮大小调整
+        int textX;
+        int textY;
+        
+        if (this.getWidth() <= 15 && this.getHeight() <= 15) {
+            // 小按钮特殊处理
+            if (text.equals("+") || text.equals("-") || text.equals("↑") || text.equals("↓")) {
+                // 单字符符号按钮居中显示
+                textX = this.getX() + (this.getWidth() - textRenderer.getWidth(text)) / 2;
+                textY = this.getY() + (this.getHeight() - 8) / 2 + 1; // 垂直微调以更好地居中
+            } else {
+                // 其他文本
+                textX = this.getX() + (this.getWidth() - textWidth) / 2;
+                textY = this.getY() + (this.getHeight() - 8) / 2;
+            }
+        } else {
+            // 正常大小按钮
+            textX = this.getX() + (this.getWidth() - textWidth) / 2;
+            textY = this.getY() + (this.getHeight() - 8) / 2;
+        }
         
         // 绘制文本阴影
         context.drawTextWithShadow(textRenderer, this.getMessage(), textX, textY, TEXT_COLOR);
